@@ -1,0 +1,13 @@
+# Build artifacts
+/secondbrain
+src/secondbrain
+*.exe
+
+# Local data
+/data/
+/brain/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

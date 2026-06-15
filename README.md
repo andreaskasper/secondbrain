@@ -169,15 +169,103 @@ Returns `201` if newly created, `200` if it replaced an existing file.
 
 Like `PUT`, but returns `409 Conflict` if the file already exists.
 
-### `PATCH /<path>.md` — append
+### `PATCH /<path>.md` — partial edit
 
-Appends the body to an existing file (a newline separator is inserted if
-needed). Returns `404` if the file does not exist.
+`PATCH` edits an existing file in place. The mode is chosen by query
+parameters; with no parameters it falls back to **append**. All modes accept an
+optional `If-Match` header (see *Concurrency & ETags*) and return the new
+`ETag` of the file.
+
+Line numbers count **every** line in the file, including the frontmatter block,
+exactly like the `lines=` read modifier — so a read with `?lines=10-12` and a
+write with `?lines=10-12` address the same lines.
+
+**Append (default).** Appends the body, inserting a single newline separator if
+the file does not already end with one.
+
+```bash
+curl -X PATCH "$BASE/notes/x.md" -H "X-API-Key: $KEY" --data-binary 'one more line'
+```
+
+**Replace / insert lines.** The body becomes the replacement (an empty body
+deletes the selected lines):
+
+| Query param   | Effect                                                       |
+| ------------- | ------------------------------------------------------------ |
+| `lines=A-B`   | Replace the inclusive 1-based range (`A-`, `-B` allowed).    |
+| `head=N`      | Replace the first N lines.                                   |
+| `tail=N`      | Replace the last N lines.                                    |
+| `insert=N`    | Insert the body **before** line N (1-based); nothing removed.|
+| `prepend=1`   | Insert the body at the very top.                             |
+
+```bash
+# Replace lines 10-12 with the request body
+curl -X PATCH "$BASE/notes/x.md?lines=10-12" -H "X-API-Key: $KEY" \
+  --data-binary @snippet.md
+```
+
+**Find & replace.** Operates on the whole file; the data travels in the query,
+so the body is ignored:
+
+| Query param | Effect                                              |
+| ----------- | --------------------------------------------------- |
+| `replace=`  | The text (or pattern) to search for (required).     |
+| `with=`     | The replacement (default: empty = delete).          |
+| `regex=1`   | Treat `replace` as a regular expression (`$1` refs).|
+| `case=1`    | Case-sensitive (default: case-insensitive).         |
+| `all=1`     | Replace every occurrence (default: first only).     |
+
+```bash
+curl -X PATCH "$BASE/notes/x.md?replace=TODO&with=DONE&all=1" -H "X-API-Key: $KEY"
+```
+
+The response reports how many occurrences were replaced:
+`{"replaced": 3, "size": 1234, "etag": "..."}`.
+
+**Merge frontmatter.** With `?frontmatter=1` the body is parsed as
+`key: value` lines (same subset as the frontmatter parser) and merged into the
+file's frontmatter, creating the block if absent. A value of `null` (or `~`)
+deletes the key:
+
+```bash
+curl -X PATCH "$BASE/notes/x.md?frontmatter=1" -H "X-API-Key: $KEY" \
+  --data-binary $'tags: [done, archived]\nauthor: andreas'
+```
+
+All `PATCH` modes return `404` if the file does not exist and `400` on an
+invalid range, pattern or empty search string.
 
 ### `DELETE /<path>` — delete
 
 Deletes a file. For directories, pass `?recursive=true` to delete a non-empty
 directory; an empty directory is removed without it.
+
+### Concurrency & ETags
+
+Every response for a single file carries an `ETag` header derived from the
+file's full content. Two patterns build on it:
+
+- **Conditional reads** — send `If-None-Match: <etag>` on a plain `GET`; the
+  server replies `304 Not Modified` if the file is unchanged.
+- **Optimistic locking** — send `If-Match: <etag>` on `PUT`, `PATCH` or
+  `DELETE`. If the file changed since you read it (the ETag no longer matches),
+  the write is rejected with `412 Precondition Failed` and nothing is modified.
+  Use `If-Match: *` to require that the file merely exists.
+
+A typical read-modify-write loop for an agent:
+
+```bash
+# Read and capture the current ETag
+ETAG=$(curl -sD - -o body.md "$BASE/notes/x.md" -H "X-API-Key: $KEY" \
+  | awk 'tolower($1)=="etag:"{print $2}' | tr -d '\r')
+
+# Write back only if nobody else touched it in the meantime
+curl -X PATCH "$BASE/notes/x.md?lines=10-12" -H "X-API-Key: $KEY" \
+  -H "If-Match: $ETAG" --data-binary @snippet.md
+```
+
+Partial edits are serialised by an internal write lock, so concurrent writers
+cannot corrupt a file or slip past an `If-Match` check.
 
 ### `GET /healthz` — health check
 
@@ -195,6 +283,7 @@ Errors are returned as JSON: `{"error": "...", "status": <code>}`.
 | 403    | Path escapes the data directory.                     |
 | 404    | File or directory not found.                         |
 | 409    | Already exists (POST) / directory not empty (DELETE).|
+| 412    | `If-Match` precondition failed (file changed).       |
 | 413    | Request body too large.                              |
 
 ## Security notes

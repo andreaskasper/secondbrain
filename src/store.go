@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,10 @@ const mdExt = ".md"
 // Store is a thin, path-safe wrapper around a directory tree of markdown files.
 type Store struct {
 	Root string
+	// mu serialises read-modify-write operations (partial edits, conditional
+	// writes/deletes) so that concurrent requests cannot corrupt a file or
+	// race past an If-Match precondition.
+	mu sync.Mutex
 }
 
 // NewStore creates the data directory if needed and returns a Store rooted there.
@@ -218,101 +223,16 @@ func (s *Store) List(urlPath string, recursive, withMeta bool) ([]Entry, error) 
 // Write creates or overwrites a markdown file. When overwrite is false and the
 // file already exists, ErrAlreadyExists is returned. Parent directories are
 // created automatically.
+//
+// Deprecated: use WriteCond, which also supports If-Match preconditions and
+// shares the store write lock. Kept for backwards compatibility.
 func (s *Store) Write(urlPath string, content []byte, overwrite bool) (created bool, err error) {
-	full, err := s.resolve(urlPath)
-	if err != nil {
-		return false, err
-	}
-	if !strings.EqualFold(filepath.Ext(full), mdExt) {
-		return false, ErrNotMarkdown
-	}
-
-	existed := false
-	if info, statErr := os.Stat(full); statErr == nil {
-		if info.IsDir() {
-			return false, ErrIsDirectory
-		}
-		existed = true
-		if !overwrite {
-			return false, ErrAlreadyExists
-		}
-	}
-
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(full, content, 0o644); err != nil {
-		return false, err
-	}
-	return !existed, nil
-}
-
-// Append appends content to an existing markdown file, inserting a newline
-// separator if the existing content does not already end with one.
-func (s *Store) Append(urlPath string, content []byte) error {
-	full, err := s.resolve(urlPath)
-	if err != nil {
-		return err
-	}
-	if !strings.EqualFold(filepath.Ext(full), mdExt) {
-		return ErrNotMarkdown
-	}
-	info, err := os.Stat(full)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return ErrNotFound
-		}
-		return err
-	}
-	if info.IsDir() {
-		return ErrIsDirectory
-	}
-
-	f, err := os.OpenFile(full, os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if info.Size() > 0 {
-		if _, err := f.WriteString("\n"); err != nil {
-			return err
-		}
-	}
-	_, err = f.Write(content)
-	return err
+	created, _, err = s.WriteCond(urlPath, content, overwrite, "")
+	return created, err
 }
 
 // Delete removes a file, or a directory (only when recursive is true or the
 // directory is empty).
 func (s *Store) Delete(urlPath string, recursive bool) error {
-	full, err := s.resolve(urlPath)
-	if err != nil {
-		return err
-	}
-	if full == s.Root {
-		return ErrForbidden // never delete the root
-	}
-	info, err := os.Stat(full)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return ErrNotFound
-		}
-		return err
-	}
-	if info.IsDir() {
-		if recursive {
-			return os.RemoveAll(full)
-		}
-		// Refuse to delete a non-empty directory without recursive=true.
-		entries, rerr := os.ReadDir(full)
-		if rerr != nil {
-			return rerr
-		}
-		if len(entries) > 0 {
-			return ErrDirNotEmpty
-		}
-		return os.Remove(full)
-	}
-	return os.Remove(full)
+	return s.DeleteCond(urlPath, recursive, "")
 }

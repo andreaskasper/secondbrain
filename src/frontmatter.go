@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -121,6 +123,43 @@ func parseFlatYAML(block string) Frontmatter {
 		}
 	}
 	return fm
+}
+
+// serializeFrontmatter renders a Frontmatter map back into a "--- ... ---"
+// block followed by the body. Keys are emitted in sorted order for stable,
+// diff-friendly output. An empty map yields just the body (no block).
+func serializeFrontmatter(fm Frontmatter, body []byte) []byte {
+	if len(fm) == 0 {
+		return body
+	}
+	keys := make([]string, 0, len(fm))
+	for k := range fm {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	for _, k := range keys {
+		switch v := fm[k].(type) {
+		case []string:
+			fmt.Fprintf(&b, "%s: [%s]\n", k, strings.Join(v, ", "))
+		case string:
+			fmt.Fprintf(&b, "%s: %s\n", k, v)
+		default:
+			fmt.Fprintf(&b, "%s: %v\n", k, v)
+		}
+	}
+	b.WriteString("---\n")
+	b.Write(body)
+	return []byte(b.String())
+}
+
+// isNull reports whether an incoming frontmatter value is an explicit null
+// marker ("null" or "~"), used to signal deletion of a key on a merge.
+func isNull(v any) bool {
+	s, ok := v.(string)
+	return ok && (s == "null" || s == "~")
 }
 
 func unquote(s string) string {

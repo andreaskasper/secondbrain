@@ -108,6 +108,21 @@ func (a *App) serveFile(w http.ResponseWriter, r *http.Request, urlPath string, 
 	}
 	q := r.URL.Query()
 
+	// The ETag tracks the whole-file state and pairs with If-Match on writes.
+	etag := etagFor(content)
+	w.Header().Set("ETag", etag)
+
+	// Conditional GET only for the plain, unmodified representation, so the
+	// validator unambiguously identifies the bytes the client would receive.
+	plain := !prefersJSON(r) && !isTrue(q.Get("json")) && !isTrue(q.Get("nofrontmatter")) &&
+		q.Get("head") == "" && q.Get("tail") == "" && q.Get("grep") == "" && q.Get("lines") == ""
+	if plain {
+		if inm := r.Header.Get("If-None-Match"); inm != "" && etagMatches(inm, etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+
 	// Structured JSON view with parsed frontmatter.
 	if prefersJSON(r) || isTrue(q.Get("json")) {
 		fm, body := splitFrontmatter(content)
@@ -173,11 +188,13 @@ func (a *App) handleWrite(w http.ResponseWriter, r *http.Request, overwrite bool
 	if err != nil {
 		return // error already written
 	}
-	created, werr := a.store.Write(r.URL.Path, body, overwrite)
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	created, etag, werr := a.store.WriteCond(r.URL.Path, body, overwrite, ifMatch)
 	if werr != nil {
 		writeStoreError(w, werr)
 		return
 	}
+	setETag(w, etag)
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
@@ -186,27 +203,116 @@ func (a *App) handleWrite(w http.ResponseWriter, r *http.Request, overwrite bool
 		"path":    cleanURLPath(r.URL.Path),
 		"created": created,
 		"size":    len(body),
+		"etag":    etag,
 	})
 }
 
+// handlePatch supports four edit modes, selected by query parameters:
+//
+//	?replace=OLD&with=NEW[&regex=1][&all=1][&case=1]  search & replace
+//	?frontmatter=1            (body: key: value lines) merge frontmatter
+//	?lines=A-B | ?head=N | ?tail=N | ?insert=N | ?prepend=1  line-targeted edit
+//	(no parameters)           append the body (default)
+//
+// All modes accept an optional If-Match header for optimistic locking.
 func (a *App) handlePatch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+
+	// Mode 1: find & replace (parameters carry the data; the body is ignored).
+	if q.Has("replace") {
+		spec := ReplaceSpec{
+			Find:          q.Get("replace"),
+			With:          q.Get("with"),
+			UseRegex:      isTrue(q.Get("regex")),
+			CaseSensitive: isTrue(q.Get("case")),
+			All:           isTrue(q.Get("all")),
+		}
+		res, err := a.store.PatchReplace(r.URL.Path, spec, ifMatch)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		setETag(w, res.ETag)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path":     cleanURLPath(r.URL.Path),
+			"replaced": res.Count,
+			"size":     res.Size,
+			"etag":     res.ETag,
+		})
+		return
+	}
+
+	// The remaining modes consume the request body.
 	body, err := a.readBody(w, r)
 	if err != nil {
 		return
 	}
-	if aerr := a.store.Append(r.URL.Path, body); aerr != nil {
+
+	// Mode 2: merge frontmatter keys.
+	if isTrue(q.Get("frontmatter")) {
+		res, ferr := a.store.PatchFrontmatter(r.URL.Path, body, ifMatch)
+		if ferr != nil {
+			writeStoreError(w, ferr)
+			return
+		}
+		setETag(w, res.ETag)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path":    cleanURLPath(r.URL.Path),
+			"updated": res.Count,
+			"size":    res.Size,
+			"etag":    res.ETag,
+		})
+		return
+	}
+
+	// Mode 3: targeted line edit (replace a range / head / tail, or insert).
+	if q.Has("lines") || q.Has("head") || q.Has("tail") || q.Has("insert") || q.Has("prepend") {
+		if q.Has("insert") && atoiDefault(q.Get("insert"), 0) <= 0 {
+			writeError(w, http.StatusBadRequest, "insert must be a 1-based line number >= 1")
+			return
+		}
+		spec := LineEdit{
+			Lines:   q.Get("lines"),
+			Head:    atoiDefault(q.Get("head"), 0),
+			Tail:    atoiDefault(q.Get("tail"), 0),
+			Insert:  atoiDefault(q.Get("insert"), 0),
+			Prepend: isTrue(q.Get("prepend")),
+		}
+		res, lerr := a.store.PatchLines(r.URL.Path, spec, body, ifMatch)
+		if lerr != nil {
+			writeStoreError(w, lerr)
+			return
+		}
+		setETag(w, res.ETag)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path":    cleanURLPath(r.URL.Path),
+			"patched": true,
+			"size":    res.Size,
+			"etag":    res.ETag,
+		})
+		return
+	}
+
+	// Mode 4 (default): append to the file.
+	res, aerr := a.store.AppendCond(r.URL.Path, body, ifMatch)
+	if aerr != nil {
 		writeStoreError(w, aerr)
 		return
 	}
+	setETag(w, res.ETag)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":     cleanURLPath(r.URL.Path),
 		"appended": len(body),
+		"size":     res.Size,
+		"etag":     res.ETag,
 	})
 }
 
 func (a *App) handleDelete(w http.ResponseWriter, r *http.Request) {
 	recursive := isTrue(r.URL.Query().Get("recursive"))
-	if err := a.store.Delete(r.URL.Path, recursive); err != nil {
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	if err := a.store.DeleteCond(r.URL.Path, recursive, ifMatch); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -240,8 +346,19 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg, "status": status})
 }
 
+func setETag(w http.ResponseWriter, etag string) {
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
+}
+
 func writeStoreError(w http.ResponseWriter, err error) {
+	var ve *ValidationError
 	switch {
+	case errors.As(err, &ve):
+		writeError(w, http.StatusBadRequest, ve.Error())
+	case errors.Is(err, ErrPreconditionFailed):
+		writeError(w, http.StatusPreconditionFailed, "if-match precondition failed (file was modified)")
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, ErrForbidden):

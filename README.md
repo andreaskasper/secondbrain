@@ -1,8 +1,19 @@
-# secondbrain
+# secondbrain 🧠
 
 A fast, path-based REST document store for Markdown files — built so that
 Claude and other agents (and you) can quickly create, read, update, delete and
 **search** a "second brain" knowledge base.
+
+### Status & Stats
+
+[![Go Version](https://img.shields.io/github/go-mod/go-version/andreaskasper/secondbrain?filename=src%2Fgo.mod)](https://go.dev/)
+![Last Commit](https://img.shields.io/github/last-commit/andreaskasper/secondbrain.svg)
+![Commit Activity](https://img.shields.io/github/commit-activity/m/andreaskasper/secondbrain.svg)
+[![Issues](https://img.shields.io/github/issues/andreaskasper/secondbrain.svg)](https://github.com/andreaskasper/secondbrain/issues)
+![Repo Size](https://img.shields.io/github/repo-size/andreaskasper/secondbrain.svg)
+![Stars](https://img.shields.io/github/stars/andreaskasper/secondbrain.svg?style=social)
+
+---
 
 Files are stored as plain `.md` files in a real directory tree on a mounted
 volume, so the data stays transparent, portable and git-friendly. The path in
@@ -218,3 +229,24 @@ A leading `--- ... ---` block is parsed as frontmatter. The parser supports the
 common flat cases: `key: value`, inline lists (`tags: [a, b]`) and block lists
 (`tags:` followed by `  - a`). `title` and `tags` are surfaced in listings and
 the structured JSON view.
+
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to open an issue or submit a Pull Request.
+
+## 📝 License
+
+MIT License — feel free to use this in your own projects!
+
+## 💰 Support the project
+
+If this project saves you time, consider supporting its development:
+
+[![donate via Patreon](https://img.shields.io/badge/Donate-Patreon-green.svg)](https://www.patreon.com/AndreasKasper)
+[![donate via PayPal](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.me/AndreasKasper)
+[![donate via Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-green.svg)](https://ko-fi.com/andreaskasper)
+[![Sponsors](https://img.shields.io/github/sponsors/andreaskasper)](https://github.com/sponsors/andreaskasper)
+
+---
+
+**Made with ❤️ by [Andreas Kasper](https://github.com/andreaskasper)**

@@ -1,0 +1,117 @@
+# secondbrain with a Prometheus that can scrape it
+#
+#   cp .env.example .env      and fill it in
+#   printf '%s' "$SECONDBRAIN_METRICS_KEY" > secondbrain.key
+#   docker compose up -d
+#
+# What matters here is the network layout, not Prometheus. secondbrain serves
+# its metrics on a second listener, :9090, and that port is never published:
+# there is no "9090:9090" anywhere in this file, and adding one would undo the
+# whole arrangement. A port that is never mapped is reachable from other
+# containers on the internal network and from nowhere else, whatever the key
+# is - which is a stronger statement than any authentication.
+#
+# The MCP endpoint is published in plaintext on 2020, which is fine on a
+# machine you trust and wrong on the internet. For a real deployment take the
+# secondbrain service from ../traefik or ../cloudflared and copy the four
+# metrics variables and the internal network into it; nothing else changes.
+
+name: secondbrain-prometheus
+
+services:
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    restart: unless-stopped
+
+    ports:
+      # The MCP endpoint only. The metrics port is deliberately absent.
+      - "2020:2020"
+
+    environment:
+      SECONDBRAIN_PUBLIC_URL: ${SECONDBRAIN_PUBLIC_URL:-http://localhost:2020}
+      SECONDBRAIN_USERNAME: ${SECONDBRAIN_USERNAME:-andreas}
+      SECONDBRAIN_PASSWORD: ${SECONDBRAIN_PASSWORD:?set SECONDBRAIN_PASSWORD in .env}
+      SECONDBRAIN_LOG_LEVEL: ${SECONDBRAIN_LOG_LEVEL:-info}
+
+      SECONDBRAIN_METRICS: "true"
+      SECONDBRAIN_METRICS_PATH: ${SECONDBRAIN_METRICS_PATH:-/metrics}
+      # Metrics on their own listener, and only there. The main listener on
+      # 2020 then answers a genuine 404 for /metrics rather than a 401, so
+      # nothing on the public side hints that the endpoint exists. This
+      # listener also serves its own /healthz.
+      SECONDBRAIN_METRICS_LISTEN: ${SECONDBRAIN_METRICS_LISTEN:-:9090}
+      # Belt and braces. The unpublished port is what keeps the endpoint
+      # private; the key covers the case where something else joins this
+      # network later. At least 16 characters, and the same value has to be
+      # in ./secondbrain.key for Prometheus to send it.
+      SECONDBRAIN_METRICS_KEY: ${SECONDBRAIN_METRICS_KEY:?set SECONDBRAIN_METRICS_KEY in .env}
+
+    volumes:
+      - secondbrain-data:/data
+      # Only needed for more than one user or for vault restrictions:
+      # - ./config.yaml:/etc/secondbrain/config.yaml:ro
+
+    # No read_only: this container writes notes, the search index and git.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "/secondbrain", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - internal
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # The vault gauges are only interesting over months, so keep them that
+      # long. A single secondbrain produces a handful of series.
+      - --storage.tsdb.retention.time=365d
+
+    ports:
+      # Prometheus' own UI, bound to the loopback interface. It has no
+      # authentication of its own, so it must not be published on 0.0.0.0.
+      # Reach it over an SSH tunnel, or drop this section entirely and query
+      # it from Grafana on the same network.
+      - "127.0.0.1:9091:9090"
+
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # The scrape credential. Not in this repository - see the README.
+      # Must be readable by UID 65534, which is who the image runs as.
+      - ./secondbrain.key:/etc/prometheus/secondbrain.key:ro
+      - prometheus-data:/prometheus
+
+    networks:
+      - internal
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  # Not marked internal: true, because secondbrain still publishes 2020 and
+  # Prometheus may need to reach an alertmanager. The metrics port is private
+  # because it is not published, not because the network is closed.
+  internal:
+
+volumes:
+  secondbrain-data:
+  prometheus-data:

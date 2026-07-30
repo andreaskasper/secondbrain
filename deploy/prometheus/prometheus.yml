@@ -1,0 +1,28 @@
+# Scrape configuration for secondbrain.
+#
+# The target is the container name plus the port of the second listener,
+# resolved on the internal Docker network. That port is not published, so this
+# only works from inside the network - which is the point of the arrangement.
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: secondbrain
+    metrics_path: /metrics
+    # The key lives in a file rather than in this config, so this file can be
+    # committed and the key cannot. Rotating it means writing a new value into
+    # both the file and .env and restarting both containers - secondbrain
+    # reads its key at startup.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secondbrain.key
+    static_configs:
+      - targets: ["secondbrain:9090"]
+
+  # Prometheus scraping itself, so that a gap in the graphs can be told apart
+  # from a Prometheus that was not running.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

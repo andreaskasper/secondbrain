@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security &mdash; secondbrain</title>
+<meta name="description" content="The threat model for a server that holds your private notes: what a stolen token reaches, why path traversal is structural, prompt injection from note content, and the limits that are not solved.">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Security &mdash; secondbrain">
+<meta property="og:description" content="What an attacker with a token can and cannot do, and what this server does not protect you from.">
+<meta property="og:image" content="https://andreaskasper.github.io/secondbrain/logo.svg">
+<meta property="og:url" content="https://andreaskasper.github.io/secondbrain/security.html">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="logo.svg" alt=""> secondbrain</a>
+    <div class="header-actions">
+      <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+    <nav class="nav">
+      <a href="index.html">Overview</a>
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html" aria-current="page">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub&nbsp;&rarr;</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap doc-layout">
+
+  <aside class="toc">
+    <strong>On this page</strong>
+    <a href="#model">Threat model</a>
+    <a href="#token">What a token reaches</a>
+    <a href="#paths">Path traversal</a>
+    <a href="#injection">Injection from notes</a>
+    <a href="#network">No outbound calls</a>
+    <a href="#audit">The audit log</a>
+    <a href="#tls">Without TLS</a>
+    <a href="#client">A compromised client</a>
+    <a href="#limits">Honest limits</a>
+    <a href="#reporting">Reporting</a>
+  </aside>
+
+  <div class="doc-body">
+
+    <section id="model">
+      <h1 style="font-size:clamp(1.9rem,4vw,2.6rem)">Security</h1>
+      <p class="lede">This server holds the operator's private notes. That makes the questions different from the ones its sibling <a href="https://github.com/andreaskasper/aegis">aegis</a> answers. Aegis exists so that a secret never enters a model's context; here the content <em>is</em> the point, and an agent that could not read it would be useless. So the design cannot be about withholding data. It is about bounding what a mistake or a manipulation can do to it.</p>
+
+      <p>Two properties frame everything below. First, the data is plain files: whatever happens, recovery does not depend on this software. Second, an agent editing prose fails quietly &mdash; a lost paragraph produces no error, no failing test, and no complaint until somebody goes looking for it months later. Most of what follows is aimed at that second problem rather than at an attacker.</p>
+
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Threat</th><th>What actually stops it</th></tr></thead>
+          <tbody>
+            <tr><td>An agent overwrites a note that changed since it read it</td><td><code>note_write</code> requires the <code>content_hash</code> from <code>note_read</code> and is refused when the file moved on.</td></tr>
+            <tr><td>An agent rewrites a whole note to change one sentence</td><td>Section and exact-string edits exist and are the documented preference; an ambiguous string edit is refused rather than guessed.</td></tr>
+            <tr><td>A vault-wide replace destroys hundreds of notes</td><td><code>vault_replace</code> and <code>tag_rename</code> default <code>dry_run</code> to true and answer with a diff.</td></tr>
+            <tr><td>Something is deleted that should not have been</td><td>Nothing is removed. A timestamped copy goes to the trash, and the change is a revertible commit.</td></tr>
+            <tr><td>A tool reads or writes outside the vault</td><td>Path validation is structural: relative, contained, no dot-prefixed component.</td></tr>
+            <tr><td>A note's own text instructs the agent</td><td>Not preventable. Bounded by read-only users, dry runs, the trash and git history &mdash; see <a href="#injection">below</a>.</td></tr>
+            <tr><td>Credentials leak from the server</td><td>Tokens exist in memory only and are never written to disk.</td></tr>
+            <tr><td>Note text leaks through the logs</td><td>The audit line records metadata only, at every log level including <code>debug</code>.</td></tr>
+            <tr><td>An agent uses the server to reach the network</td><td>There are no outbound requests to make. The only exception is an optional git push you configured.</td></tr>
+            <tr><td>A second user reads the wrong vault</td><td>Users are limited to named vaults in <code>config.yaml</code>; a vault they cannot open does not appear in <code>vault_list</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="token">
+      <h2>What an attacker with a token reaches</h2>
+      <p>The honest answer first: a valid access token for a read-write user is equivalent to a copy of that user's vaults. There is no second factor between the token and the notes, and there could not be one without making the server useless to the agent it is built for.</p>
+
+      <div class="grid grid-2" style="margin-top:20px">
+        <div class="card">
+          <h3>Can</h3>
+          <p>Read every note in the vaults that user may open, including the ones you have forgotten are there. Search them, list their tags, follow their links, download the attachments. Write, move, delete and rename &mdash; unless the user is read-only.</p>
+        </div>
+        <div class="card">
+          <h3>Cannot</h3>
+          <p>Reach a vault that user is not listed for, or any path outside a vault. Read <code>.git</code>, <code>.obsidian</code> or <code>.secondbrain</code> through any tool. Make the server call an arbitrary URL. Write a file with an extension outside the attachment allow-list, or larger than 32 MiB. Erase anything permanently within the retention window.</p>
+        </div>
+      </div>
+
+      <p style="margin-top:20px">What bounds the damage is that destruction is hard to make stick. Every write is a commit; with a git remote configured, that commit is already elsewhere before anybody notices. Deleted content sits in the trash for thirty days. An attacker who wants your notes gone has to reach the filesystem, not the MCP endpoint.</p>
+
+      <p>Reading is the asymmetric risk, and it has no technical answer. A token that has been stolen has already read whatever it wanted before you can revoke it. Two things reduce the window: a token lifetime of twelve hours by default, and the fact that a restart invalidates every session because nothing is persisted.</p>
+
+      <div class="note">
+        <strong>Split your vaults along the lines you would want an incident to follow.</strong> A user restricted to <code>vaults: [work]</code> is the only mechanism here that limits what a compromised session can read, and it costs nothing to set up on day one.
+      </div>
+    </section>
+
+    <section id="paths">
+      <h2>Path traversal, handled structurally</h2>
+      <p>Every path argument goes through one function before it reaches the filesystem. After cleaning, the path must be relative, must resolve to somewhere inside the vault, and must contain no component beginning with a dot. Anything else is refused.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">refused, all of them</span></div>
+<pre data-lang="shell">../../etc/passwd          # leaves the vault
+/etc/passwd               # not relative
+wiki/../../other/note.md  # leaves the vault after cleaning
+.git/config               # dot component
+.secondbrain/index.db     # dot component
+notes/.obsidian/app.json  # dot component, at any depth</pre>
+      </div>
+
+      <p>The third rule is the one worth arguing for. A blacklist of forbidden directories is a list somebody has to remember to extend: add a new tool, or a new editor that keeps state in a dot directory, and the list is quietly out of date. A rule about the shape of a path applies to every tool that exists and every tool that will exist, without anyone maintaining it. That is why <code>.git</code>, <code>.obsidian</code> and <code>.secondbrain</code> are unreachable &mdash; not because they are named anywhere, but because of what their names look like.</p>
+
+      <p>The practical consequence is that the server cannot corrupt its own git repository or its own index through a tool call, and that a vault's internal state is not something an agent can inspect, quote or edit.</p>
+    </section>
+
+    <section id="injection">
+      <h2>Prompt injection from note content</h2>
+      <p>This is the interesting attack against a knowledge base, and it deserves to be stated without hedging: <strong>a note can contain instructions, and this server cannot fix that.</strong></p>
+
+      <p>The mechanism is ordinary. You paste an article into <code>raw/</code>. Somewhere in it is a sentence addressed to a model rather than to you &mdash; delete the following notes, append this text to the journal, put the contents of <code>people/</code> into a note titled <em>summary</em>. Later an agent reads that file as part of answering a question, and the text arrives in its context indistinguishable from your own instructions. The same applies to a shared vault, a git pull from a repository somebody else can write to, and a web page saved by a browser extension.</p>
+
+      <p>No amount of validation on the server helps, because the content is the payload and delivering the content is the job. What the design does instead is bound the consequences.</p>
+
+      <div class="grid grid-2" style="margin-top:20px">
+        <div class="card">
+          <h3>Read-only users</h3>
+          <p>A user configured with <code>read_only: true</code> is never offered a mutating tool. No amount of persuasion in a note produces a write, because the capability is absent from <code>tools/list</code> rather than refused on call. For an agent whose job is answering questions, this is the correct configuration.</p>
+        </div>
+        <div class="card">
+          <h3>Dry runs</h3>
+          <p>Every mutating tool can return a diff instead of writing, and the two vault-wide tools do so by default. A client that shows the diff turns a manipulated tool call into something a human declines.</p>
+        </div>
+        <div class="card">
+          <h3>The trash</h3>
+          <p>Instructions to delete produce a timestamped copy in <code>.secondbrain/trash/</code> and nothing more. Thirty days is long enough to notice.</p>
+        </div>
+        <div class="card">
+          <h3>Git history</h3>
+          <p>Every write is a commit naming the tool and the path. <code>git log --stat</code> over a suspicious afternoon shows exactly what changed, and reverting is ordinary git.</p>
+        </div>
+      </div>
+
+      <p style="margin-top:20px">Exfiltration is the harder half. An agent persuaded to read <code>people/</code> and summarise it has done so inside its own context, and this server has no view of what the client does next. The audit log will show that the notes were read, which is a record and not a defence. If a vault contains material you would not want summarised into a chat window, it should be a separate vault reached by a separate user, and probably not by an agent at all.</p>
+
+      <div class="note warn">
+        <strong>Treat <code>raw/</code> and anything imported as untrusted input.</strong> The <code>wiki-raw</code> layout separates collected material from written material for editorial reasons, and the separation happens to be exactly the boundary you want here.
+      </div>
+    </section>
+
+    <section id="network">
+      <h2>No outbound calls, and nothing on disk</h2>
+      <p>secondbrain makes no outbound network requests. Not for link previews, not for embeddings, not for telemetry, not for update checks. There is no URL fetcher, no webhook, and no tool that takes an address. The single exception is the git push you configure yourself with <code>SECONDBRAIN_GIT_REMOTE</code>, to a remote you chose.</p>
+
+      <p>This removes a whole class of problem before it starts. An agent that has been talked into something cannot make the server fetch an internal address, cannot use it to probe a network it should not see, and cannot use an outbound request as an exfiltration channel. There is no allow-list to maintain because there is nothing to allow.</p>
+
+      <p>Credentials follow the same principle. Registered clients, authorization codes, access tokens and refresh tokens live in process memory and are never written to disk. Restarting the container invalidates every session &mdash; a real inconvenience, accepted because it means the volume you back up and the volume somebody might one day walk off with contain notes and nothing else.</p>
+
+      <p>Passwords, when given as <code>bcrypt:</code>, are never present in plaintext anywhere: not in the environment, not in the config file, not in memory beyond the moment of comparison.</p>
+    </section>
+
+    <section id="audit">
+      <h2>The audit log contains no note text</h2>
+      <p>One structured line per tool call goes to stdout: who, which vault, which tool, which path, how many bytes, how long it took. That is the entire record. No content, no snippets, no search queries rendered with their hits, no diffs &mdash; at any log level, <code>debug</code> included.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">stdout</span></div>
+<pre data-lang="json">{"ts":"2026-07-30T14:02:11Z","level":"info","event":"tool",
+ "user":"andreas","vault":"personal","tool":"note_section_edit",
+ "path":"wiki/postgres.md","bytes":184,"duration_ms":7}</pre>
+      </div>
+
+      <p>The reasoning is worth spelling out, because logging more would be easy and would look helpful. A log is copied places the data is not: into a log aggregator, into a monitoring service, into a support ticket, onto somebody's laptop while debugging. An audit log that quoted note content would be a second copy of the knowledge base with weaker access control and no retention policy. The log is deliberately less useful than it could be so that it is not worth stealing.</p>
+
+      <p>What you can answer from it: which notes an agent touched and when, whether a burst of writes happened, how long a search took, whether a session did something at three in the morning. What you cannot answer from it: what any note says. For that there is git, which is inside the volume where the notes already are.</p>
+
+      <h3>The metrics endpoint</h3>
+      <p>The optional Prometheus endpoint is held to the same rule, and it is off by default. What it publishes is counts and timings: notes, words and bytes per vault, broken links, orphans, open tasks, tool calls by tool and outcome, cumulative durations, login attempts by outcome. What it never publishes is a path, a title, a tag or a line of note content &mdash; no metric carries any of them, and there is no label that could. The route label on <code>secondbrain_http_requests_total</code> is drawn from a fixed list of known routes rather than from the request path, so a caller cannot mint labels, or grow the series count without bound, by asking for invented URLs.</p>
+
+      <p>That restraint does not make an unprotected endpoint harmless. Counts are still the shape of somebody's private notes: how much they write and when they stopped, how large the work vault is next to the personal one, whether anyone logged in last night and how often they failed. Treat those numbers as belonging to the same person the notes do. Two mechanisms are available and they compose &mdash; a shared key of at least sixteen characters, compared in constant time, and a second listener on a port you simply do not publish. The second is the stronger: a port bound inside the Docker network and never mapped cannot be reached from outside whatever the key is. The endpoint also carries its own rate limit bucket, so a scraper presenting a wrong key cannot be turned into a timing oracle and cannot exhaust the limiter that protects the login page.</p>
+
+      <p>With metrics on and neither a key nor a private listener configured, the server logs <code>metrics_unprotected</code> once at startup, naming the path and hinting at both fixes. It is a warning and not a refusal, because on loopback an open endpoint is a reasonable thing to want. On a published port it means the opposite: anyone who can reach the server can read those counts, and that one line in the log is the only notice there will be. <a href="docs.html#metrics">The metrics documentation</a> lists every series and how to protect it.</p>
+    </section>
+
+    <section id="tls">
+      <h2>What running without TLS exposes</h2>
+      <p>The container speaks plain HTTP and does not terminate TLS. On a laptop, over loopback, that is fine. Across any network it is not, and the consequences are worse here than for most services.</p>
+
+      <ul>
+        <li><strong>Every note that crosses the wire is readable in transit.</strong> Search results, note bodies, the diffs from a dry run. Anyone on the path sees your knowledge base as you use it.</li>
+        <li><strong>The bearer token is readable too</strong>, and a token is all that is needed to read everything else at leisure.</li>
+        <li><strong>The password crosses the wire on the login page.</strong> The OAuth flow includes an HTML form; over HTTP that form posts a password in the clear.</li>
+        <li><strong>PKCE does not save you.</strong> It protects an intercepted authorization code from being exchanged by a different client. It does nothing for a plaintext transport where the resulting token is visible anyway.</li>
+      </ul>
+
+      <p>Put a reverse proxy in front of it and do not publish port 2020 alongside. The <a href="deploy.html">deployment guide</a> has three working setups. If the server is only ever reached from the machine it runs on, bind it to <code>127.0.0.1:2020</code> and leave it there.</p>
+    </section>
+
+    <section id="client">
+      <h2>A compromised MCP client</h2>
+      <p>If the client is compromised, this server is compromised with it, and there is no mechanism here that changes that. The client holds a valid token, and every request it makes is indistinguishable from a legitimate one because it <em>is</em> a legitimate one.</p>
+
+      <p>This is worth being clear about because MCP servers are sometimes described as if they contained a client. They do not. The trust boundary runs between the network and the container; the client is on the trusted side by construction. What that implies in practice:</p>
+
+      <ul>
+        <li>The security of your notes is bounded by the security of the machine running the MCP client, and by the model provider you have chosen to send them to.</li>
+        <li>Revocation is restarting the container. Tokens are in memory, so a restart invalidates every session immediately &mdash; a blunt instrument that is always available.</li>
+        <li>The audit log tells you what was read after the fact. It does not prevent anything.</li>
+        <li>A read-only user for an agent that does not need to write is the cheapest real reduction in blast radius available, and it survives a compromised client.</li>
+      </ul>
+    </section>
+
+    <section id="limits">
+      <h2>Honest limits</h2>
+      <p>Stated plainly, because software that oversells its guarantees is worse than software that has none.</p>
+
+      <div class="grid grid-2" style="margin-top:20px">
+        <div class="card">
+          <h3>No encryption at rest</h3>
+          <p>Notes are Markdown files with normal permissions. Anyone with the volume, a backup of it, or root on the host reads everything. This is a direct consequence of the central promise &mdash; files you can open without this software &mdash; and it will not change. Use full-disk encryption on the host if that matters, which for a private knowledge base it probably does.</p>
+        </div>
+        <div class="card">
+          <h3>No per-note ACLs</h3>
+          <p>Access is per vault. A user who may open a vault may read every note in it; there is no way to hide a directory, a tag or a single file from an otherwise permitted user. If a subset of your notes needs different access, it needs a different vault. Per-directory rules are <a href="roadmap.html">on the roadmap</a>, honestly labelled as considered rather than committed.</p>
+        </div>
+        <div class="card">
+          <h3>No protection from the host</h3>
+          <p>Root on the machine means the notes, the git repository and the process memory. This server is a boundary between an agent and a mistake, not between an attacker and a filesystem.</p>
+        </div>
+        <div class="card">
+          <h3>No content review</h3>
+          <p>Nothing inspects what an agent writes. A plausible, well-formatted, entirely wrong paragraph is written exactly like a correct one. The defence is that it is a commit you can read and revert, not that it was prevented.</p>
+        </div>
+        <div class="card">
+          <h3>Rate limiting is coarse</h3>
+          <p>There is no per-tool throttle. An agent in a loop can produce a great many commits quickly. They are all revertible and none are destructive, but the repository will show it.</p>
+        </div>
+        <div class="card">
+          <h3>The trash has a horizon</h3>
+          <p>Thirty days by default, then it is purged. After that the safety net is git, and if versioning is off there is no safety net at all beyond your backups. Leave <code>SECONDBRAIN_GIT</code> on.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="reporting">
+      <h2>Reporting</h2>
+      <p>Security problems can be reported through <a href="https://github.com/andreaskasper/secondbrain/security/advisories">GitHub security advisories</a> on the repository, which keeps the report private until there is something to say. Please include a reproduction; a path that escapes a vault, a tool that writes without a hash check, or a log line containing note text are all worth a report.</p>
+      <p>This is a single-author MIT project, not a product with an on-call rotation. Expect a considered answer rather than a fast one.</p>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>&copy; <span data-year>2026</span> <a href="https://github.com/andreaskasper">Andreas Kasper</a> &middot; MIT licensed</div>
+    <nav class="foot-links">
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub</a>
+      <a href="https://github.com/andreaskasper/secondbrain/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

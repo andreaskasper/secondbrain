@@ -105,7 +105,7 @@ func ParseNote(rel, raw string) *Note {
 // present. Only a block that starts on the very first line counts - a "---"
 // further down is a horizontal rule, not metadata.
 func splitFrontmatter(raw string) (string, string, bool) {
-	s := strings.TrimPrefix(raw, "﻿")
+	s := strings.TrimPrefix(raw, "\ufeff")
 	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
 		return "", raw, false
 	}

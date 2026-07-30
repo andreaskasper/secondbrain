@@ -1,0 +1,147 @@
+# secondbrain - example configuration
+#
+# You probably do not need this file. A single person running a container for
+# their own notes configures everything through the environment; see
+# .env.example. This file exists for exactly two situations: more than one
+# user, or one user who wants a vault kept away from a particular client.
+#
+# When it defines a users: list, that list wins outright -
+# SECONDBRAIN_USERNAME and SECONDBRAIN_PASSWORD are then ignored entirely.
+# The alternative would be a rule about which password takes precedence, and
+# a rule like that in an authentication path is a bug waiting to be written.
+# Every other setting below can equally come from the environment, where the
+# variable name is the key in upper case with a SECONDBRAIN_ prefix.
+#
+# Copy to config.yaml and mount it read-only at /etc/secondbrain/config.yaml.
+# Keep it out of version control unless every password is an env: or file:
+# reference.
+#
+# Check it before deploying - this reports every problem at once and never
+# prints a password:
+#
+#   docker run --rm -v "$PWD/config.yaml:/etc/secondbrain/config.yaml:ro" \
+#     ghcr.io/andreaskasper/secondbrain validate /etc/secondbrain/config.yaml
+
+# --- Server -----------------------------------------------------------------
+
+listen: ":2020"
+
+# The URL clients reach secondbrain on, without a trailing slash. Required.
+# Every OAuth redirect is derived from it, so it must be the address the
+# client uses, not the container name. May also be set with
+# SECONDBRAIN_PUBLIC_URL.
+public_url: "https://notes.example.com"
+
+# Browser origins allowed to call /mcp. An empty list means no Origin check,
+# which is what hosted clients such as claude.ai need. Restrict it only when
+# every client is one you control.
+allowed_origins: []
+# allowed_origins: ["https://claude.ai"]
+
+# Vault root inside the container. One directory per vault below it, each
+# with its own .secondbrain/ and .git/.
+data_dir: "/data"
+
+# The vault a tool call means when it names none.
+default_vault: "default"
+
+# Ceiling on a single tool result in bytes, before truncation. 256 KiB.
+max_response_bytes: 262144
+
+# How long an access token stays valid. Tokens are held in memory only, so a
+# restart invalidates them whatever this says.
+token_ttl: "12h"
+
+# How long an OAuth authorization code stays redeemable. The client exchanges
+# it immediately, so this is short on purpose.
+code_ttl: "60s"
+
+# How long a deleted or overwritten note stays recoverable in
+# <vault>/.secondbrain/trash/. 720h is 30 days. Nothing is ever removed
+# outright, so this is the only thing that ever frees that space.
+trash_retention: "720h"
+
+# Failed logins allowed per source IP, per window.
+login_rate_limit: "10/m"
+
+# --- Versioning -------------------------------------------------------------
+
+# Every write becomes a commit in <vault>/.git, naming the tool and the path.
+# note_history, note_diff and note_restore read those commits; turning this
+# off gives up all three.
+git: true
+
+# Push after every commit when set. Left empty by default because an
+# unreachable remote turns each note edit into a network call that can fail.
+git_remote: ""
+
+# Credential for that push. Prefer file: to keep it out of this file.
+git_token: ""
+# git_token: "file:/run/secrets/git_token"
+
+git_author: "secondbrain"
+git_email: "secondbrain@localhost"
+
+# --- Metrics ----------------------------------------------------------------
+
+# A Prometheus endpoint. Off by default: a knowledge base is not a public
+# service, and an endpoint that reports how many notes somebody has and when
+# they last wrote one is not something to expose unasked.
+metrics: false
+
+# Where on the listener. Must start with a slash and may not collide with
+# /mcp, /healthz or /.
+metrics_path: "/metrics"
+
+# Shared key a scraper must present, as "Authorization: Bearer <key>" or as
+# "X-API-Key". Compared in constant time; shorter than 16 characters is a
+# startup error. Prefer file: or env: to keep the value out of this file.
+# Generate one with: openssl rand -hex 32
+metrics_key: ""
+# metrics_key: "file:/run/secrets/metrics_key"
+
+# Serve the metrics on their own address instead - and only there, which
+# makes the main listener return a genuine 404 rather than a 401. A port
+# bound inside the container network and never published cannot be reached
+# from outside whatever the key is, so this is the stronger of the two
+# protections. It is decided at startup: switching it on needs a restart, not
+# a reload. See deploy/prometheus/ for a scraper on that network.
+metrics_listen: ""
+# metrics_listen: ":9090"
+
+# With neither a key nor a private listener the endpoint is reachable by
+# anyone who can reach the server. That is logged once as
+# metrics_unprotected; the server still starts.
+
+# --- Users ------------------------------------------------------------------
+#
+# Passwords may be a literal, a bcrypt: hash, env:NAME, or file:/path. A
+# literal must be at least 8 characters. Generate a hash with:
+#
+#   docker run --rm -it ghcr.io/andreaskasper/secondbrain hashpw
+
+users:
+  # ---------------------------------------------------------------------------
+  # Full access: every vault that exists in data_dir, including ones created
+  # later, and every tool.
+  # ---------------------------------------------------------------------------
+  - name: andreas
+    password: "bcrypt:$2a$12$REPLACE.THIS.WITH.A.REAL.HASH.xxxxxxxxxxxxxxxxxxxxxx"
+
+    # An empty or absent list means every vault. Naming vaults here is how a
+    # user is confined to some of them.
+    vaults: []
+
+    # false is the default; the mutating tools are offered normally.
+    read_only: false
+
+  # ---------------------------------------------------------------------------
+  # A client that may read the research vault and nothing else. read_only is
+  # not a permission check applied late - the mutating tools are not listed
+  # to this user at all, so the model never learns they exist and cannot
+  # propose an edit that would then be refused.
+  # ---------------------------------------------------------------------------
+  - name: research
+    password: "env:RESEARCH_PASSWORD"
+    vaults: ["research"]
+    read_only: true

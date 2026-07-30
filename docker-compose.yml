@@ -1,0 +1,131 @@
+# secondbrain - quick start
+#
+#   cp .env.example .env      and fill in at least the three required values
+#   docker compose up -d
+#
+# This file pulls the published image and never builds. To build from the
+# source in this checkout instead, add the override:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+#
+# Keeping the two apart is deliberate. A compose file that carries both
+# "build:" and "image: ghcr.io/..." silently tags a local build as the
+# official image, and the next "docker compose up" then runs that stale local
+# copy instead of the release you thought you were on.
+#
+# This exposes plaintext HTTP on 2020, which is fine on a laptop and wrong on
+# the internet. For a real deployment see deploy/traefik or deploy/cloudflared.
+
+services:
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    container_name: secondbrain
+    restart: unless-stopped
+
+    ports:
+      - "2020:2020"
+
+    environment:
+      # Required. Everything else has a working default.
+      SECONDBRAIN_USERNAME: ${SECONDBRAIN_USERNAME:-andreas}
+      SECONDBRAIN_PASSWORD: ${SECONDBRAIN_PASSWORD:?set SECONDBRAIN_PASSWORD in .env}
+      # The URL a client reaches this server on. Every OAuth redirect is
+      # derived from it, so the container name or 0.0.0.0 will not do.
+      SECONDBRAIN_PUBLIC_URL: ${SECONDBRAIN_PUBLIC_URL:-http://localhost:2020}
+
+      SECONDBRAIN_LISTEN: ${SECONDBRAIN_LISTEN:-:2020}
+      SECONDBRAIN_DATA: ${SECONDBRAIN_DATA:-/data}
+      SECONDBRAIN_DEFAULT_VAULT: ${SECONDBRAIN_DEFAULT_VAULT:-default}
+      SECONDBRAIN_CONFIG: ${SECONDBRAIN_CONFIG:-/etc/secondbrain/config.yaml}
+
+      # Versioning is on by default: every write becomes a commit, which is
+      # what makes note_history, note_diff and note_restore work at all.
+      SECONDBRAIN_GIT: ${SECONDBRAIN_GIT:-true}
+      SECONDBRAIN_GIT_REMOTE: ${SECONDBRAIN_GIT_REMOTE:-}
+      SECONDBRAIN_GIT_TOKEN: ${SECONDBRAIN_GIT_TOKEN:-}
+      SECONDBRAIN_GIT_AUTHOR: ${SECONDBRAIN_GIT_AUTHOR:-secondbrain}
+      SECONDBRAIN_GIT_EMAIL: ${SECONDBRAIN_GIT_EMAIL:-secondbrain@localhost}
+
+      SECONDBRAIN_MAX_RESPONSE_BYTES: ${SECONDBRAIN_MAX_RESPONSE_BYTES:-262144}
+      SECONDBRAIN_TOKEN_TTL: ${SECONDBRAIN_TOKEN_TTL:-12h}
+      SECONDBRAIN_CODE_TTL: ${SECONDBRAIN_CODE_TTL:-60s}
+      # How long a deleted or overwritten note stays recoverable in
+      # .secondbrain/trash/ before it is purged. 720h is 30 days.
+      SECONDBRAIN_TRASH_RETENTION: ${SECONDBRAIN_TRASH_RETENTION:-720h}
+      # Empty means no Origin check, which is what hosted MCP clients need.
+      SECONDBRAIN_ALLOWED_ORIGINS: ${SECONDBRAIN_ALLOWED_ORIGINS:-}
+      SECONDBRAIN_LOG_LEVEL: ${SECONDBRAIN_LOG_LEVEL:-info}
+
+      # Prometheus metrics, off by default. When you turn them on, protect
+      # them with a key, a private listener, or both.
+      SECONDBRAIN_METRICS: ${SECONDBRAIN_METRICS:-false}
+      SECONDBRAIN_METRICS_PATH: ${SECONDBRAIN_METRICS_PATH:-/metrics}
+      # Minimum 16 characters; also takes env: and file: references.
+      SECONDBRAIN_METRICS_KEY: ${SECONDBRAIN_METRICS_KEY:-}
+      # Empty means the metrics live on the main listener, next to /mcp. See
+      # the private-listener block below for the alternative.
+      SECONDBRAIN_METRICS_LISTEN: ${SECONDBRAIN_METRICS_LISTEN:-}
+
+    # --- The private metrics listener -------------------------------------
+    #
+    # Rather than guarding the endpoint with a key on a published port, bind
+    # it to a second port and never map that port. A port that has no entry
+    # under "ports:" is reachable from other containers on the same Docker
+    # network and from nowhere else - there is no rule to get wrong and no
+    # key to leak. Replace the four metrics variables above with:
+    #
+    #   SECONDBRAIN_METRICS: "true"
+    #   SECONDBRAIN_METRICS_PATH: /metrics
+    #   SECONDBRAIN_METRICS_LISTEN: ":9090"
+    #
+    # and leave "ports:" as it is: 2020 stays published, 9090 does not.
+    # Deliberately do NOT add "9090:9090" - that undoes the whole point. A
+    # scraper joins the network instead; deploy/prometheus/ is that setup,
+    # complete with a Prometheus service and its scrape config.
+    #
+    # Mounting is decided at startup, so this takes a restart of the
+    # container, not a SIGHUP.
+
+    volumes:
+      # A named volume works everywhere and needs no ownership fixing, so it
+      # is the default. The notes are still plain files: "docker run --rm -v
+      # secondbrain-data:/data alpine tar cf - /data" gets them out.
+      - secondbrain-data:/data
+      #
+      # Bind mount instead if you want the vault directly in your filesystem,
+      # for example to open it in Obsidian. The container runs as the
+      # distroless nonroot user, UID 65532, and will fail to start on a
+      # directory it cannot write:
+      #
+      #   mkdir -p ./data && sudo chown -R 65532:65532 ./data
+      #
+      # This is the single most common way a first deployment fails.
+      # - ./data:/data
+      #
+      # Optional, and only for more than one user or vault restrictions:
+      # - ./config.yaml:/etc/secondbrain/config.yaml:ro
+
+    # Deliberately NOT read_only: true. secondbrain writes the notes
+    # themselves, the SQLite FTS5 index and one git repository per vault.
+    # A read-only root filesystem would leave it unable to do its job.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+    # distroless carries no shell and no curl, so the health check is the
+    # binary answering about itself rather than an HTTP request.
+    healthcheck:
+      test: ["CMD", "/secondbrain", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  secondbrain-data:

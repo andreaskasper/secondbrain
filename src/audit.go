@@ -93,6 +93,8 @@ type AuditRecord struct {
 	Error      string
 }
 
+func (a AuditRecord) seconds() float64 { return float64(a.DurationMS) / 1000 }
+
 func (a AuditRecord) emit() {
 	f := map[string]any{
 		"tool":        a.Tool,

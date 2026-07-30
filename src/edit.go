@@ -186,12 +186,18 @@ func (v *Vault) Move(from, to string, overwrite bool) (string, string, error) {
 func (v *Vault) afterWrite(rel, reason string) {
 	if v.idx != nil {
 		if err := v.idx.UpdatePath(v, rel); err != nil {
+			v.metrics.IndexError()
 			logWarn("index_update_failed", map[string]any{"vault": v.Name, "path": rel, "error": err.Error()})
+		} else {
+			v.metrics.IndexUpdated()
 		}
 	}
 	if v.git != nil && reason != "" {
 		if err := v.git.Commit(reason); err != nil {
+			v.metrics.GitFailure()
 			logWarn("git_commit_failed", map[string]any{"vault": v.Name, "error": err.Error()})
+		} else {
+			v.metrics.GitCommit()
 		}
 	}
 }

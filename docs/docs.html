@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentation &mdash; secondbrain</title>
+<meta name="description" content="Configuration, the config.yaml, the CLI, the storage layout, the four vault layouts, frontmatter and link conventions, and a complete reference of all 34 MCP tools in secondbrain.">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Documentation &mdash; secondbrain">
+<meta property="og:description" content="Configuration, storage, vault layouts and a complete reference of all 34 MCP tools.">
+<meta property="og:image" content="https://andreaskasper.github.io/secondbrain/logo.svg">
+<meta property="og:url" content="https://andreaskasper.github.io/secondbrain/docs.html">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="logo.svg" alt=""> secondbrain</a>
+    <div class="header-actions">
+      <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+    <nav class="nav">
+      <a href="index.html">Overview</a>
+      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub&nbsp;&rarr;</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap doc-layout">
+
+  <aside class="toc">
+    <strong>On this page</strong>
+    <a href="#quick-start">Quick start</a>
+    <a href="#env">Environment</a>
+    <a href="#config">config.yaml</a>
+    <a href="#cli">CLI</a>
+    <a href="#metrics">Metrics</a>
+    <a href="#storage">Storage</a>
+    <a href="#layouts">Vault layouts</a>
+    <a href="#conventions">Notes and links</a>
+    <a href="#search">Search</a>
+    <a href="#auth">Authentication</a>
+    <a href="#safety">Hashes and dry runs</a>
+    <a href="#sections">Section edits</a>
+    <a href="#tools">All 34 tools</a>
+  </aside>
+
+  <div class="doc-body">
+
+    <section id="quick-start">
+      <h1 style="font-size:clamp(1.9rem,4vw,2.6rem)">Documentation</h1>
+      <p class="lede">Everything needed to run secondbrain and to understand what the agent on the other end is allowed to do. For reverse proxies and backups see the <a href="deploy.html">deployment guide</a>; the German specification in <a href="https://github.com/andreaskasper/secondbrain/blob/main/spezifikation.md">spezifikation.md</a> is authoritative where this page and it disagree.</p>
+
+      <h2>Quick start</h2>
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker</span></div>
+<pre data-lang="shell">mkdir -p ./data && sudo chown -R 65532:65532 ./data
+
+docker run -d --name secondbrain -p 2020:2020 \
+  -v "$PWD/data:/data" \
+  -e SECONDBRAIN_PUBLIC_URL=https://brain.example.com \
+  -e SECONDBRAIN_USERNAME=andreas \
+  -e SECONDBRAIN_PASSWORD='bcrypt:$2a$12$...' \
+  --user 65532:65532 --cap-drop ALL \
+  ghcr.io/andreaskasper/secondbrain:latest</pre>
+      </div>
+
+      <p>Or with Compose:</p>
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">services:
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    ports: ["2020:2020"]
+    volumes:
+      - ./data:/data
+    environment:
+      SECONDBRAIN_PUBLIC_URL: https://brain.example.com
+      SECONDBRAIN_USERNAME: andreas
+      SECONDBRAIN_PASSWORD: "bcrypt:$2a$12$..."
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped</pre>
+      </div>
+
+      <div class="note warn">
+        <strong>The volume must belong to UID 65532.</strong> The runtime is distroless and the process is the nonroot user 65532. A bind mount created by <code>docker compose up</code> belongs to root, the first write fails, and the container restarts in a loop. Run <code>chown -R 65532:65532</code> on the directory before the first start. This is the single most common first-deployment failure; the <a href="deploy.html#uid">deployment guide</a> says more.
+      </div>
+
+      <div class="note warn">
+        <strong>secondbrain does not terminate TLS.</strong> Put it behind a reverse proxy in production and do not publish port 2020 when you do. These are your private notes; plain HTTP across a network means anyone on the path can read them and steal the bearer token.
+      </div>
+
+      <p>Then point an MCP client at <code>https://brain.example.com/mcp</code>. The client discovers the OAuth endpoints, registers itself and opens the login page in a browser.</p>
+
+      <p>Building from source instead:</p>
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">git clone https://github.com/andreaskasper/secondbrain
+cd secondbrain/src
+CGO_ENABLED=0 go build -o secondbrain .
+SECONDBRAIN_DATA=../data \
+SECONDBRAIN_PUBLIC_URL=http://localhost:2020 \
+SECONDBRAIN_USERNAME=andreas SECONDBRAIN_PASSWORD=secret ./secondbrain</pre>
+      </div>
+      <p>Go 1.25, no framework, <code>CGO_ENABLED=0</code>. SQLite is <a href="https://pkg.go.dev/modernc.org/sqlite">modernc.org/sqlite</a>, a pure-Go implementation, so the binary is static and the image is distroless.</p>
+    </section>
+
+    <section id="env">
+      <h2>Environment</h2>
+      <p>Environment first. A single user with a single vault needs three variables and nothing else. A config file is only necessary when there is more than one user &mdash; and if a config file defines users, it wins outright and the two username variables are ignored.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>SECONDBRAIN_USERNAME</code></td><td>&mdash;</td><td>Login name. Required unless <code>config.yaml</code> defines users.</td></tr>
+            <tr><td><code>SECONDBRAIN_PASSWORD</code></td><td>&mdash;</td><td>A literal password, or <code>bcrypt:$2a$12$...</code>, or <code>env:NAME</code>, or <code>file:/path</code>. Prefer a hash: it means the plaintext exists nowhere on the host.</td></tr>
+            <tr><td><code>SECONDBRAIN_PUBLIC_URL</code></td><td>&mdash;</td><td><strong>Required.</strong> The external base URL, no trailing slash. OAuth discovery documents are generated from it, so a wrong value produces a client that cannot complete the flow.</td></tr>
+            <tr><td><code>SECONDBRAIN_LISTEN</code></td><td><code>:2020</code></td><td>Listen address inside the container.</td></tr>
+            <tr><td><code>SECONDBRAIN_DATA</code></td><td><code>/data</code></td><td>Root directory holding one subdirectory per vault.</td></tr>
+            <tr><td><code>SECONDBRAIN_DEFAULT_VAULT</code></td><td><code>default</code></td><td>The vault used when a tool call does not name one.</td></tr>
+            <tr><td><code>SECONDBRAIN_CONFIG</code></td><td><code>/etc/secondbrain/config.yaml</code></td><td>Optional config file. Its absence is not an error.</td></tr>
+            <tr><td><code>SECONDBRAIN_GIT</code></td><td><code>true</code></td><td>Commit every write. Turning it off removes <code>note_history</code>, <code>note_diff</code> and <code>note_restore</code> along with it.</td></tr>
+            <tr><td><code>SECONDBRAIN_GIT_REMOTE</code></td><td>&mdash;</td><td>When set, push after every commit. An off-site copy that needs no scheduler.</td></tr>
+            <tr><td><code>SECONDBRAIN_GIT_TOKEN</code></td><td>&mdash;</td><td>Credential for that push.</td></tr>
+            <tr><td><code>SECONDBRAIN_GIT_AUTHOR</code></td><td><code>secondbrain</code></td><td>Commit author name.</td></tr>
+            <tr><td><code>SECONDBRAIN_GIT_EMAIL</code></td><td>&mdash;</td><td>Commit author email.</td></tr>
+            <tr><td><code>SECONDBRAIN_MAX_RESPONSE_BYTES</code></td><td><code>262144</code></td><td>Upper bound on a single tool response. Long notes are truncated with a marker rather than silently cut.</td></tr>
+            <tr><td><code>SECONDBRAIN_TOKEN_TTL</code></td><td><code>12h</code></td><td>Access token lifetime.</td></tr>
+            <tr><td><code>SECONDBRAIN_CODE_TTL</code></td><td><code>60s</code></td><td>Authorization code lifetime.</td></tr>
+            <tr><td><code>SECONDBRAIN_TRASH_RETENTION</code></td><td><code>720h</code></td><td>How long deleted and overwritten content stays in <code>.secondbrain/trash/</code>. Thirty days.</td></tr>
+            <tr><td><code>SECONDBRAIN_ALLOWED_ORIGINS</code></td><td>&mdash;</td><td>Comma-separated allow-list for the <code>Origin</code> header. Empty means no check, which is correct for a server reached only by a native MCP client.</td></tr>
+            <tr><td><code>SECONDBRAIN_LOG_LEVEL</code></td><td><code>info</code></td><td><code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code>. No level ever prints note content.</td></tr>
+            <tr><td><code>SECONDBRAIN_METRICS</code></td><td><code>false</code></td><td>Expose a Prometheus endpoint. Off unless asked for; see <a href="#metrics">Metrics</a>.</td></tr>
+            <tr><td><code>SECONDBRAIN_METRICS_PATH</code></td><td><code>/metrics</code></td><td>Where the endpoint lives. Must start with a slash and may not collide with <code>/mcp</code>, <code>/healthz</code> or <code>/</code>.</td></tr>
+            <tr><td><code>SECONDBRAIN_METRICS_KEY</code></td><td>&mdash;</td><td>Shared key a scraper must present, as <code>Authorization: Bearer</code> or as <code>X-API-Key</code>. Takes the same <code>env:</code> and <code>file:</code> prefixes as a password, and is refused below 16 characters.</td></tr>
+            <tr><td><code>SECONDBRAIN_METRICS_LISTEN</code></td><td>&mdash;</td><td>Serve metrics on their own address, for example <code>:9090</code>, instead of on the main listener. A second <code>/healthz</code> comes with it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Password prefixes</h3>
+      <p>The same four forms are accepted everywhere a password appears, in the environment and in the config file.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Form</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>secret</code></td><td>The literal password. Convenient for a laptop, wrong for a server.</td></tr>
+            <tr><td><code>bcrypt:$2a$12$...</code></td><td>A bcrypt hash produced by <code>secondbrain hashpw</code>. The recommended form.</td></tr>
+            <tr><td><code>env:NAME</code></td><td>Read from another environment variable at startup.</td></tr>
+            <tr><td><code>file:/run/secrets/pw</code></td><td>Read from a file, which is what Docker and Kubernetes secrets give you.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="config">
+      <h2>config.yaml</h2>
+      <p>The config file exists for one reason: more than one user. Each user carries the vaults it may open and whether it may write, so the question that matters &mdash; what exactly can this login reach? &mdash; is answered by reading one contiguous block.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">/etc/secondbrain/config.yaml</span></div>
+<pre data-lang="yaml"># Every setting is top level. There is no server: block - the file mirrors
+# the environment variables one for one, minus the SECONDBRAIN_ prefix.
+listen: ":2020"
+public_url: "https://brain.example.com"   # required
+data_dir: "/data"
+default_vault: "personal"
+max_response_bytes: 262144
+token_ttl: "12h"
+trash_retention: "720h"
+login_rate_limit: "10/m"
+git: true
+metrics: false
+metrics_path: "/metrics"
+metrics_key: "file:/run/secrets/metrics_key"   # at least 16 characters
+metrics_listen: ":9090"                        # a port you do not publish
+
+users:
+  # Full access to every vault on the server.
+  - name: andreas
+    password: "bcrypt:$2a$12$..."
+    vaults: []            # empty means all
+    read_only: false
+
+  # A second agent that may read everything but change nothing.
+  - name: reviewer
+    password: "env:REVIEWER_PASSWORD"
+    vaults: []
+    read_only: true
+
+  # A work assistant that never sees the private vault.
+  - name: work
+    password: "file:/run/secrets/work_password"
+    vaults: [work]
+    read_only: false</pre>
+      </div>
+
+      <p>Three properties of that file are worth stating explicitly.</p>
+      <ul>
+        <li><strong><code>vaults: []</code> means every vault</strong>, including vaults created later. Naming vaults explicitly is the safer habit, because a vault created next month is then not automatically reachable by an old login.</li>
+        <li><strong>A read-only user is not offered the mutating tools at all.</strong> They are absent from <code>tools/list</code>, not refused on call. A model cannot be talked into using a tool it was never shown.</li>
+        <li><strong>The file wins.</strong> If it defines <code>users</code>, <code>SECONDBRAIN_USERNAME</code> and <code>SECONDBRAIN_PASSWORD</code> are ignored rather than merged, so there is never a second, forgotten login.</li>
+      </ul>
+
+      <p>Validate before restarting anything:</p>
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">docker run --rm -v "$PWD/config.yaml:/etc/secondbrain/config.yaml:ro" \
+  ghcr.io/andreaskasper/secondbrain validate /etc/secondbrain/config.yaml</pre>
+      </div>
+    </section>
+
+    <section id="cli">
+      <h2>CLI</h2>
+      <p>The binary is the server. The subcommands are the few things you need to do around it.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>secondbrain</code></td><td>Run the server. This is the container's entrypoint.</td></tr>
+            <tr><td><code>secondbrain validate [path]</code></td><td>Parse and check a config file, then exit. Non-zero on any problem, so it belongs in a deployment pipeline.</td></tr>
+            <tr><td><code>secondbrain reindex [path]</code></td><td>Rebuild <code>.secondbrain/index.db</code> from the files on disk. Never needed in normal operation &mdash; the index reconciles at start and follows the watcher &mdash; but it is the answer to any doubt about the index, because the index is a cache.</td></tr>
+            <tr><td><code>secondbrain hashpw</code></td><td>Prompt for a password and print a bcrypt hash for <code>SECONDBRAIN_PASSWORD</code> or the config file.</td></tr>
+            <tr><td><code>secondbrain version</code></td><td>Version, commit and build date.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="metrics">
+      <h2>Metrics</h2>
+      <p>A Prometheus endpoint, off by default. A knowledge base is not a public service, and an endpoint that reports how many notes somebody has and when they last wrote one is not something to expose unasked. <code>SECONDBRAIN_METRICS=true</code> turns it on, and <code>secondbrain validate</code> prints the resulting state &mdash; the path, the address it is served on, and whether anything is guarding it.</p>
+
+      <p>There is no Prometheus client library behind it. The exposition format is a dozen lines of text, and pulling in a dependency tree to produce it is a poor trade in a container that holds somebody's private notes, so the registry is hand-rolled like the rest of the server.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">environment</span></div>
+<pre data-lang="shell">SECONDBRAIN_METRICS=true
+SECONDBRAIN_METRICS_LISTEN=:9090
+SECONDBRAIN_METRICS_KEY=file:/run/secrets/metrics_key</pre>
+      </div>
+
+      <h3>Keeping it private</h3>
+      <p>Two mechanisms, independent of one another, and they compose.</p>
+      <ul>
+        <li><strong>A shared key.</strong> <code>SECONDBRAIN_METRICS_KEY</code>, presented by the scraper as <code>Authorization: Bearer &lt;key&gt;</code> or as <code>X-API-Key</code>, compared in constant time. It takes the same <code>env:</code> and <code>file:</code> prefixes as a password, and it is refused below sixteen characters.</li>
+        <li><strong>A separate listener.</strong> <code>SECONDBRAIN_METRICS_LISTEN=":9090"</code> serves the endpoint, and a second <code>/healthz</code> beside it, on an address of its own. This is the stronger of the two: a port bound inside the Docker network and never mapped cannot be reached from outside whatever the key is, whereas a key is only ever as good as the file it sits in on the scraping host.</li>
+      </ul>
+      <p>With metrics on and neither of them set, the server logs <code>metrics_unprotected</code> once at startup, naming the path and hinting at both fixes. It does not refuse to start &mdash; on loopback an open endpoint is reasonable &mdash; but the line is there so that an accident is visible in the log rather than only on the network.</p>
+
+      <p>The endpoint has its own rate limit bucket, sixty requests a minute per source IP. It is deliberately not the login bucket: a scraper with the wrong key can then neither be used as a timing oracle nor exhaust the budget that protects the login page.</p>
+
+      <div class="note">
+        <strong>Turning metrics on needs a restart, not a reload.</strong> Where the route is mounted is decided at startup. When <code>metrics_listen</code> is set the handler is registered on that second listener only, so the main listener answers a genuine 404 rather than a 401 &mdash; from outside there is nothing there to authenticate against, which is the point.
+      </div>
+
+      <h3>What is exposed</h3>
+      <p>Everything below is a count or a gauge over something the server already knows. No metric carries a note path, a title, a tag or a line of content, and the route label on <code>secondbrain_http_requests_total</code> is drawn from a fixed list of known routes rather than from <code>r.URL.Path</code>, so a caller cannot mint labels by requesting invented URLs. The low cardinality is a privacy property and also the difference between a time series database that works and one that falls over.</p>
+
+      <h4>Gauges</h4>
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Metric</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>secondbrain_build_info{version,commit}</code></td><td>Always 1. The version and the commit are the labels.</td></tr>
+            <tr><td><code>secondbrain_uptime_seconds</code></td><td>Seconds since the process started.</td></tr>
+            <tr><td><code>secondbrain_users</code></td><td>Configured users.</td></tr>
+            <tr><td><code>secondbrain_oauth_clients</code></td><td>OAuth clients registered since start. In memory only, so a restart resets it.</td></tr>
+            <tr><td><code>secondbrain_access_tokens</code></td><td>Live access tokens.</td></tr>
+            <tr><td><code>secondbrain_refresh_tokens</code></td><td>Live refresh tokens.</td></tr>
+            <tr><td><code>secondbrain_mcp_sessions</code></td><td>Open MCP sessions.</td></tr>
+            <tr><td><code>secondbrain_vault_notes{vault}</code></td><td>Markdown notes in a vault.</td></tr>
+            <tr><td><code>secondbrain_vault_words{vault}</code></td><td>Words across a vault's notes.</td></tr>
+            <tr><td><code>secondbrain_vault_bytes{vault}</code></td><td>Bytes across a vault's notes.</td></tr>
+            <tr><td><code>secondbrain_vault_tags{vault}</code></td><td>Distinct tags in a vault.</td></tr>
+            <tr><td><code>secondbrain_vault_links{vault}</code></td><td>Internal links in a vault.</td></tr>
+            <tr><td><code>secondbrain_vault_broken_links{vault}</code></td><td>Links pointing at a note that does not exist.</td></tr>
+            <tr><td><code>secondbrain_vault_orphans{vault}</code></td><td>Notes with no link in or out.</td></tr>
+            <tr><td><code>secondbrain_vault_open_tasks{vault}</code></td><td>Unchecked task boxes.</td></tr>
+            <tr><td><code>secondbrain_vault_attachments{vault}</code></td><td>Non-Markdown files in a vault.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Counters</h4>
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Metric</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>secondbrain_tool_calls_total{tool,outcome}</code></td><td>Tool calls. <code>outcome</code> is <code>ok</code>, <code>error</code> or <code>denied</code>.</td></tr>
+            <tr><td><code>secondbrain_tool_duration_seconds_total{tool}</code></td><td>Cumulative time spent inside each tool.</td></tr>
+            <tr><td><code>secondbrain_tool_result_bytes_total{tool}</code></td><td>Cumulative result bytes returned per tool.</td></tr>
+            <tr><td><code>secondbrain_http_requests_total{path,status}</code></td><td>HTTP requests by route and status code.</td></tr>
+            <tr><td><code>secondbrain_logins_total{outcome}</code></td><td>Login attempts. <code>outcome</code> is <code>success</code>, <code>failed</code> or <code>rate_limited</code>.</td></tr>
+            <tr><td><code>secondbrain_writes_total</code></td><td>Mutating tool calls that actually wrote.</td></tr>
+            <tr><td><code>secondbrain_dry_runs_total</code></td><td>Mutating tool calls that were dry runs.</td></tr>
+            <tr><td><code>secondbrain_truncated_results_total</code></td><td>Results cut short by <code>max_response_bytes</code>.</td></tr>
+            <tr><td><code>secondbrain_index_updates_total</code></td><td>Single-path index updates.</td></tr>
+            <tr><td><code>secondbrain_index_reconciles_total</code></td><td>Full index reconciliations.</td></tr>
+            <tr><td><code>secondbrain_index_errors_total</code></td><td>Index operations that failed.</td></tr>
+            <tr><td><code>secondbrain_watch_events_total</code></td><td>Filesystem changes picked up by the watcher.</td></tr>
+            <tr><td><code>secondbrain_git_commits_total</code></td><td>Commits made.</td></tr>
+            <tr><td><code>secondbrain_git_failures_total</code></td><td>Commits or pushes that failed.</td></tr>
+            <tr><td><code>secondbrain_trash_purged_total</code></td><td>Trashed copies removed after the retention window.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>The vault gauges come from the search index rather than from the files, so a scrape is a handful of counting queries against SQLite and not a walk of the filesystem. Scraping every fifteen seconds costs nothing worth measuring.</p>
+
+      <h3>What to actually watch</h3>
+      <p>The vault gauges are the operationally interesting ones, because they describe the health of the knowledge base rather than the health of the process. <code>secondbrain_vault_broken_links</code> and <code>secondbrain_vault_orphans</code> climbing steadily over weeks is a knowledge base decaying &mdash; notes being written that nothing points at, links left behind by renames &mdash; and that is invisible from inside any single note. <code>secondbrain_vault_notes</code> flat while <code>secondbrain_writes_total</code> climbs means an agent is editing but never creating, which is usually a conventions problem in <code>instructions.md</code> rather than a fault. <code>secondbrain_truncated_results_total</code> rising means <code>max_response_bytes</code> is too small for the way the vault is being queried, and the agent is working from clipped results. On the process side, <code>secondbrain_git_failures_total</code> above zero means the off-site copy has quietly stopped happening, and <code>secondbrain_logins_total{outcome="failed"}</code> is the series to alert on.</p>
+
+      <p>The Prometheus side of it &mdash; publishing the port only inside the Compose network, generating the key and the scrape config that reads it &mdash; is in the <a href="deploy.html#metrics">deployment guide</a>.</p>
+    </section>
+
+    <section id="storage">
+      <h2>Storage</h2>
+      <p>One directory per vault under the data root. A vault name must match <code>^[a-z0-9][a-z0-9_-]{0,63}$</code>, which keeps it a valid directory name on every filesystem and a valid path segment in a tool argument.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">/data</span></div>
+<pre data-lang="shell">/data/
+  personal/
+    inbox/
+    wiki/
+      postgres.md
+    journal/2026/2026-07-30.md
+    attachments/
+    .secondbrain/
+      index.db            # SQLite + FTS5, a cache
+      trash/              # timestamped copies, purged after retention
+      instructions.md     # sent to the client on initialize
+    .git/                 # one repository per vault
+  work/
+    ...</pre>
+      </div>
+
+      <p>Everything in <code>.secondbrain/</code> is disposable. Delete the directory and the next start rebuilds the index from the files; you lose the trash and the vault instructions, and nothing else. That is the whole point: the notes are the product.</p>
+
+      <h3>Path safety</h3>
+      <p>Path handling is structural rather than a blacklist. After cleaning, a path must satisfy three conditions:</p>
+      <ul>
+        <li>it is relative, not absolute;</li>
+        <li>it stays inside the vault after resolution, so no <code>..</code> can climb out;</li>
+        <li>no component begins with a dot.</li>
+      </ul>
+      <p>The third rule is doing more work than it looks. It makes <code>.git</code>, <code>.obsidian</code> and <code>.secondbrain</code> unreachable through every tool, present and future, without anyone having to remember to add them to a list. A rule that cannot be forgotten is worth more than a list that can.</p>
+
+      <h3>Writes</h3>
+      <p>Every write goes to a temporary file in the same directory and is then renamed over the target. A crash mid-write leaves either the old file or the new one, never half of either. The rename is followed by the git commit, so history and disk agree.</p>
+    </section>
+
+    <section id="layouts">
+      <h2>Vault layouts</h2>
+      <p><code>vault_create</code> takes a layout, creates the directories and writes <code>.secondbrain/instructions.md</code> describing them. Those instructions are handed to the client in the MCP <code>initialize</code> response, which is how a vault teaches an agent its own conventions without anything living in a system prompt somewhere else.</p>
+
+      <div class="grid grid-2" style="margin-top:22px">
+        <div class="card">
+          <h3>wiki-raw <span class="badge badge-read">default</span></h3>
+          <p><code>inbox/ raw/ wiki/ journal/ projects/ people/ attachments/ templates/</code></p>
+          <p style="margin-top:.6rem">The organising idea is a hard line between material you collected and material you wrote. Raw source &mdash; a pasted article, a transcript, an export &mdash; is never rewritten. Distilled wiki notes are rewritten constantly. Mixing them ruins a vault, because you can no longer tell which sentences you are allowed to change.</p>
+        </div>
+        <div class="card">
+          <h3>zettelkasten</h3>
+          <p><code>fleeting/ literature/ zettel/ journal/ attachments/ templates/</code></p>
+          <p style="margin-top:.6rem">Atomic, densely linked notes: one idea per note, the links carrying the structure instead of the directories. Suits people who already work this way; frustrating for people who do not, because it asks for a decision at capture time.</p>
+        </div>
+        <div class="card">
+          <h3>para</h3>
+          <p><code>projects/ areas/ resources/ archive/ journal/ attachments/ templates/</code></p>
+          <p style="margin-top:.6rem">Organised by actionability rather than by subject. The strength is that finished work moves to <code>archive/</code> and stops competing for attention; the cost is that the same subject can appear in three places over its life.</p>
+        </div>
+        <div class="card">
+          <h3>empty</h3>
+          <p><code>attachments/ templates/</code></p>
+          <p style="margin-top:.6rem">Two directories and nothing else, for a vault whose structure already exists &mdash; an imported Obsidian vault, or a repository you are pointing the server at for the first time.</p>
+        </div>
+      </div>
+
+      <p style="margin-top:22px">Every layout uses the same journal convention: <code>journal/YYYY/YYYY-MM-DD.md</code>. <code>daily_note</code> and <code>daily_range</code> depend on it, so it is the one path shape that is not yours to change.</p>
+    </section>
+
+    <section id="conventions">
+      <h2>Notes and links</h2>
+      <p>A note is a Markdown file with optional YAML frontmatter. The dialect is Obsidian's, because that is the editor most likely to be open on the same directory.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">wiki/postgres.md</span></div>
+<pre data-lang="md">---
+title: PostgreSQL
+tags: [database, ops]
+aliases: [postgres, pg]
+created: 2026-03-11
+updated: 2026-07-30
+---
+
+# PostgreSQL
+
+Notes on running it, not on using it. See [[Connection pooling]] and
+[[wiki/backups#postgres|the backup section]].
+
+## Connection pooling
+
+Pool size is per process, not per host. #ops
+
+- [ ] measure the real ceiling on the reporting box
+- [x] move pgbouncer to transaction mode</pre>
+      </div>
+
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Convention</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>[[wikilink]]</code></td><td>Resolved by note title, alias or path. Broken links are reported by <code>note_backlinks</code> and <code>vault_review</code> rather than fixed silently.</td></tr>
+            <tr><td><code>[[link#anchor|alias]]</code></td><td>Anchor and display text are both understood, and both survive a <code>note_move</code> that rewrites the link.</td></tr>
+            <tr><td><code>[text](path.md)</code></td><td>Ordinary Markdown links are indexed and rewritten the same way.</td></tr>
+            <tr><td><code>#tag</code></td><td>Inline tags and frontmatter <code>tags</code> are merged into one namespace, so <code>tag_list</code> and <code>tag_rename</code> see both.</td></tr>
+            <tr><td><code>aliases</code></td><td>Alternative names a wikilink may use. <code>note_merge</code> adds the source note's title here so old links keep resolving.</td></tr>
+            <tr><td><code>created</code> / <code>updated</code></td><td>Maintained automatically &mdash; but only for notes that already have frontmatter or are being created now. A hand-written note without metadata is never given any.</td></tr>
+            <tr><td><code>- [ ]</code></td><td>Checkboxes anywhere in the vault are the task list. <code>task_list</code> reports file and line; <code>task_toggle</code> flips one.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>That last rule is deliberate and occasionally surprising. If you keep a plain file with no frontmatter, this server will not quietly add three lines of YAML to the top of it the first time an agent appends a sentence. Files you wrote by hand keep looking like files you wrote by hand.</p>
+    </section>
+
+    <section id="search">
+      <h2>Search</h2>
+      <p>Full-text search is SQLite FTS5 in <code>&lt;vault&gt;/.secondbrain/index.db</code>, ranked with BM25 and returned with a snippet per hit. The index is reconciled against the filesystem at startup and then kept current by an fsnotify watcher with a 400 ms debounce.</p>
+      <p>That combination is what makes external editing normal rather than dangerous. Obsidian saving a file, a <code>git pull</code>, an <code>rsync</code> from a laptop &mdash; each is just a file event, and the index catches up within half a second. Nothing owns the directory.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Query</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>postgres pooling</code></td><td>Bare words are ANDed.</td></tr>
+            <tr><td><code>"connection pool"</code></td><td>A quoted phrase matches exactly.</td></tr>
+            <tr><td><code>postg*</code></td><td>Prefix match.</td></tr>
+            <tr><td><code>postgres OR mysql</code></td><td>Alternation.</td></tr>
+            <tr><td><code>backup NOT tape</code></td><td>Exclusion.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>FTS5 tokenises words, which means it cannot find a URL, a code fragment, a partial identifier or a piece of punctuation. That is what <code>vault_grep</code> is for: a regular expression over the raw text of every note, slower and unranked, correct when <code>note_search</code> is the wrong shape of tool.</p>
+
+      <div class="note">
+        <strong>No embeddings in v1.</strong> The schema already contains an <code>embeddings</code> table so that enabling semantic search later is a data migration rather than a schema one. Until then <code>note_related</code> is the cheap stand-in: shared tags weighted so that rare tags count for more, links in both directions, and co-citation. It is not semantic, but it answers the question that matters before writing &mdash; which note about this already exists.
+      </div>
+    </section>
+
+    <section id="auth">
+      <h2>Authentication</h2>
+      <p>OAuth 2.1 with dynamic client registration and PKCE (S256), the same implementation as <a href="https://github.com/andreaskasper/aegis">aegis</a>. The client discovers everything it needs from the two well-known documents and registers itself; you type a password into an HTML login page served by the container, and nothing else is configured on either side.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>/.well-known/oauth-protected-resource</code></td><td>Tells the client which authorization server protects <code>/mcp</code>.</td></tr>
+            <tr><td><code>/.well-known/oauth-authorization-server</code></td><td>Endpoints, supported grants, PKCE methods.</td></tr>
+            <tr><td><code>/register</code></td><td>Dynamic client registration.</td></tr>
+            <tr><td><code>/authorize</code></td><td>The HTML login page.</td></tr>
+            <tr><td><code>/token</code></td><td>Code exchange and refresh.</td></tr>
+            <tr><td><code>/mcp</code></td><td>MCP over Streamable HTTP, protocol revision 2025-06-18.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Clients, codes and tokens live in memory only. Restarting the container invalidates every session, which is a real cost and an accepted one: a process that holds credentials to a private knowledge base and writes none of them to disk leaves nothing behind for anyone who later gets the volume.</p>
+    </section>
+
+    <section id="safety">
+      <h2>Hashes and dry runs</h2>
+      <p>Four conventions run through every mutating tool. They are the reason this project has more tools than a naive read-and-write server would need.</p>
+
+      <h3>content_hash</h3>
+      <p><code>note_read</code> returns a <code>content_hash</code> alongside the content. <code>note_write</code> &mdash; the only tool that replaces a whole note &mdash; <em>requires</em> it. If the file changed since you read it, the write is refused with the current hash rather than applied. Every other mutating tool accepts <code>content_hash</code> optionally, and passing it turns a hopeful edit into a checked one.</p>
+      <p>This matters more here than in a code repository. Another agent, Obsidian on a phone, or a <code>git pull</code> can all have touched the note between the read and the write, and the failure would be a silent revert of somebody else's paragraph.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">a refused write</span></div>
+<pre data-lang="json">-&gt; note_write
+{ "path": "wiki/postgres.md",
+  "content": "...",
+  "content_hash": "sha256:9f2c..." }
+
+&lt;- error
+{ "error": "stale_content_hash",
+  "message": "wiki/postgres.md changed since it was read",
+  "content_hash": "sha256:41ab..." }</pre>
+      </div>
+
+      <h3>dry_run</h3>
+      <p>Every mutating tool takes <code>dry_run</code>. With it set, nothing is written and the tool returns the unified diff it would have applied. Two tools default it to <strong>true</strong>, because their blast radius is a whole vault rather than a note: <code>vault_replace</code> and <code>tag_rename</code>. Getting a diff back when you expected a write is the intended experience there.</p>
+
+      <h3>Trash</h3>
+      <p>Nothing is ever removed. Deletions and overwrites put a timestamped copy in <code>&lt;vault&gt;/.secondbrain/trash/</code>, purged after <code>SECONDBRAIN_TRASH_RETENTION</code>. This is independent of git, and deliberately so: git protects committed history, the trash protects the thirty seconds before somebody notices.</p>
+
+      <h3>Git</h3>
+      <p>With versioning on, every write is a commit whose message names the tool and the path &mdash; <code>note_section_edit: wiki/postgres.md</code>. That gives three tools their material (<code>note_history</code>, <code>note_diff</code>, <code>note_restore</code>) and gives you an answer to "what did the agent actually change last Tuesday" that does not depend on this software at all.</p>
+
+      <h3>The audit line</h3>
+      <p>One structured line per tool call on stdout: user, vault, tool, path, bytes, duration. Never note content, at any log level, including <code>debug</code>. An audit log of a private knowledge base that quotes the knowledge base is a second copy of it with worse access control.</p>
+    </section>
+
+    <section id="sections">
+      <h2>Section edits</h2>
+      <p><code>note_section_edit</code> is the tool an agent should reach for most often. It changes a note relative to one of its headings, so a long note can be added to without being read and rewritten &mdash; which removes both the token cost and the opportunity to lose a paragraph on the way back.</p>
+
+      <p>A section runs from its heading to the next heading of the same or higher level, subsections included. Under <code>## Connection pooling</code>, a following <code>### Pool size</code> is part of the section; the next <code>## Backups</code> ends it.</p>
+
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Mode</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>append_to_section</code></td><td>Insert at the end of the section, after its subsections. The usual choice for adding a fact to an existing topic.</td></tr>
+            <tr><td><code>prepend_to_section</code></td><td>Insert directly after the heading, before existing content.</td></tr>
+            <tr><td><code>replace_section</code></td><td>Replace the body of the section, keeping the heading itself.</td></tr>
+            <tr><td><code>insert_before_section</code></td><td>Insert immediately above the heading, in the parent section.</td></tr>
+            <tr><td><code>insert_after_section</code></td><td>Insert immediately after the section ends, before the next heading.</td></tr>
+            <tr><td><code>delete_section</code></td><td>Remove the heading and everything under it. The removed text goes to the trash like any other deletion.</td></tr>
+            <tr><td><code>append_to_note</code></td><td>Append at the end of the file. No <code>heading</code> needed.</td></tr>
+            <tr><td><code>prepend_to_note</code></td><td>Insert after the frontmatter and before the first heading. No <code>heading</code> needed.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>With <code>create: true</code> a missing heading is added rather than reported, at the end of the note. Without it, editing a section that does not exist is an error &mdash; which is usually the more useful answer, because it means the agent's model of the note is out of date.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">note_section_edit</span></div>
+<pre data-lang="json">{
+  "path": "wiki/postgres.md",
+  "mode": "append_to_section",
+  "heading": "Connection pooling",
+  "content": "PgBouncer in transaction mode; session mode\nholds a backend per client and defeats the point.",
+  "create": true,
+  "content_hash": "sha256:9f2c...",
+  "dry_run": false
+}</pre>
+      </div>
+    </section>
+
+    <section id="tools">
+      <h2>All 34 tools</h2>
+      <p>The full surface, grouped the way the server groups it. Arguments marked <code>*</code> are required; everything else has a default. A read-only user is offered only the tools marked <span class="badge badge-read">read</span> &mdash; the writing tools are absent from <code>tools/list</code> entirely.</p>
+      <p>Every tool except <code>vault_list</code> and <code>vault_create</code> takes an optional <code>vault</code> string in addition to the arguments listed below. It is added to each schema by the server rather than declared per tool, which is why it is documented here once. Omitting it uses <code>SECONDBRAIN_DEFAULT_VAULT</code>.</p>
+
+      <h3 id="t-discovery">Discovery</h3>
+
+      <div class="tool">
+        <h4>vault_list <span class="badge badge-read">read</span></h4>
+        <p>List the vaults available to you with their note count, size and last change. Call this first if you do not know which vault the user means.</p>
+        <p class="args">no arguments</p>
+      </div>
+
+      <div class="tool">
+        <h4>vault_create <span class="badge badge-write">writes</span></h4>
+        <p>Create a new vault and populate it with a starting structure. The chosen layout also writes the instructions file that is sent to the client on connect.</p>
+        <p class="args"><b>name*</b> string &middot; <b>layout</b> <code>wiki-raw</code> | <code>zettelkasten</code> | <code>para</code> | <code>empty</code></p>
+      </div>
+
+      <div class="tool">
+        <h4>vault_stats <span class="badge badge-read">read</span></h4>
+        <p>Counts and health signals: notes, words, tags, links, broken links, orphaned notes and open tasks. Useful before a cleanup, or to decide whether a search came back empty because nothing matched or because the vault is empty.</p>
+        <p class="args">no arguments</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_list <span class="badge badge-read">read</span></h4>
+        <p>List notes by directory or glob, newest first by default. This is directory browsing, not search.</p>
+        <p class="args"><b>prefix</b> string &middot; <b>glob</b> string &middot; <b>sort</b> string &middot; <b>limit</b> integer &middot; <b>offset</b> integer</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_search <span class="badge badge-read">read</span></h4>
+        <p>Full-text search across a vault, ranked, with a snippet per hit. FTS5 syntax. The tool to reach for before creating any note.</p>
+        <p class="args"><b>query</b> string &middot; <b>tags</b> string[] &middot; <b>prefix</b> string &middot; <b>glob</b> string &middot; <b>modified_after</b> string &middot; <b>limit</b> integer &middot; <b>offset</b> integer</p>
+      </div>
+
+      <div class="code" style="margin-bottom:14px">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">note_search</span></div>
+<pre data-lang="json">{
+  "query": "\"connection pool\" OR pgbouncer",
+  "tags": ["ops"],
+  "prefix": "wiki/",
+  "modified_after": "2026-01-01",
+  "limit": 10
+}</pre>
+      </div>
+
+      <div class="tool">
+        <h4>vault_grep <span class="badge badge-read">read</span></h4>
+        <p>Regular expression search over the raw text of every note, with surrounding lines. Full-text search tokenises words, so it cannot find a URL, a code fragment, a partial identifier or a piece of punctuation; this can. Slower than <code>note_search</code>, and meant as a second resort rather than a first.</p>
+        <p class="args"><b>pattern*</b> string &middot; <b>case_sensitive</b> boolean &middot; <b>prefix</b> string &middot; <b>context</b> integer &middot; <b>limit</b> integer &middot; <b>include_content</b> boolean</p>
+      </div>
+
+      <h3 id="t-reading">Reading</h3>
+
+      <div class="tool">
+        <h4>note_read <span class="badge badge-read">read</span></h4>
+        <p>Read a note. Returns the content, the parsed frontmatter and the <code>content_hash</code> that <code>note_write</code> requires. Pass a heading to read only that section, which is much cheaper than reading a long note in full.</p>
+        <p class="args"><b>path*</b> string &middot; <b>heading</b> string &middot; <b>with_metadata</b> boolean</p>
+      </div>
+
+      <div class="code" style="margin-bottom:14px">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">note_read</span></div>
+<pre data-lang="json">-&gt; { "path": "wiki/postgres.md", "heading": "Connection pooling" }
+
+&lt;- {
+  "path": "wiki/postgres.md",
+  "content": "## Connection pooling\n\nPool size is per process...",
+  "content_hash": "sha256:9f2c...",
+  "frontmatter": { "title": "PostgreSQL", "tags": ["database","ops"] }
+}</pre>
+      </div>
+
+      <div class="tool">
+        <h4>note_outline <span class="badge badge-read">read</span></h4>
+        <p>The shape of a note without its text: frontmatter, heading tree, tags, link counts and size. Read this first when a note might be long &mdash; it costs a fraction of <code>note_read</code> and tells you which section you actually want.</p>
+        <p class="args"><b>path*</b> string</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_backlinks <span class="badge badge-read">read</span></h4>
+        <p>Which notes link to this one, which notes it links to, and which of its links point at nothing. The fastest way to understand where a note sits in the vault.</p>
+        <p class="args"><b>path*</b> string</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_related <span class="badge badge-read">read</span></h4>
+        <p>Notes that are probably about the same thing, scored by shared tags (weighted so that rare tags count for more), by direct links in either direction, and by co-citation. Use it before writing a new note to find the one that already exists.</p>
+        <p class="args"><b>path*</b> string &middot; <b>limit</b> integer</p>
+      </div>
+
+      <div class="tool">
+        <h4>tag_list <span class="badge badge-read">read</span></h4>
+        <p>Every tag in the vault with the number of notes carrying it, most used first. Frontmatter tags and inline <code>#tags</code> are merged.</p>
+        <p class="args"><b>prefix</b> string &middot; <b>limit</b> integer</p>
+      </div>
+
+      <h3 id="t-writing">Writing</h3>
+
+      <div class="tool">
+        <h4>note_create <span class="badge badge-write">writes</span></h4>
+        <p>Create a new note. Fails if one already exists at that path unless <code>overwrite</code> is set &mdash; which is the point: search first, and let the failure catch the duplicate you were about to make. Frontmatter with title, tags and created is written for you.</p>
+        <p class="args"><b>path*</b> string &middot; <b>title</b> string &middot; <b>content</b> string &middot; <b>tags</b> string[] &middot; <b>overwrite</b> boolean &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_write <span class="badge badge-write">writes</span></h4>
+        <p>Replace the entire body of an existing note. Requires the <code>content_hash</code> from <code>note_read</code>, so an edit made by somebody else in between cannot be silently lost. Prefer <code>note_edit</code> or <code>note_section_edit</code> whenever you are changing part of a note rather than all of it.</p>
+        <p class="args"><b>path*</b> string &middot; <b>content*</b> string &middot; <b>content_hash*</b> string &middot; <b>keep_frontmatter</b> boolean &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_edit <span class="badge badge-write">writes</span></h4>
+        <p>Replace an exact string. <code>old_string</code> must match the file character for character, including indentation, and must be unique unless <code>replace_all</code> is set &mdash; if it appears more than once the edit is refused rather than guessed. The safest way to change a sentence.</p>
+        <p class="args"><b>path*</b> string &middot; <b>old_string*</b> string &middot; <b>new_string*</b> string &middot; <b>replace_all</b> boolean &middot; <b>content_hash</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="code" style="margin-bottom:14px">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">note_edit</span></div>
+<pre data-lang="json">{
+  "path": "wiki/postgres.md",
+  "old_string": "Pool size is per process, not per host.",
+  "new_string": "Pool size is per process, not per host, and pgbouncer\ncounts as one process per pool.",
+  "dry_run": true
+}</pre>
+      </div>
+
+      <div class="tool">
+        <h4>note_section_edit <span class="badge badge-write">writes</span></h4>
+        <p>Change a note relative to one of its headings, in one of <a href="#sections">eight modes</a>. This is how to add to a note without reading and rewriting it.</p>
+        <p class="args"><b>path*</b> string &middot; <b>mode*</b> string &middot; <b>heading</b> string &middot; <b>content</b> string &middot; <b>create</b> boolean &middot; <b>content_hash</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_frontmatter <span class="badge badge-write">writes</span></h4>
+        <p>Change a note's metadata without touching its body: set fields, add or remove tags and aliases. Use this rather than rewriting the note when all you want is a tag.</p>
+        <p class="args"><b>path*</b> string &middot; <b>set</b> object &middot; <b>unset</b> string[] &middot; <b>add_tags</b> string[] &middot; <b>remove_tags</b> string[] &middot; <b>add_aliases</b> string[] &middot; <b>content_hash</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="code" style="margin-bottom:14px">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">note_frontmatter</span></div>
+<pre data-lang="json">{
+  "path": "wiki/postgres.md",
+  "set": { "status": "reviewed" },
+  "add_tags": ["ops", "database"],
+  "remove_tags": ["todo"],
+  "add_aliases": ["pg"]
+}</pre>
+      </div>
+
+      <div class="tool">
+        <h4>note_move <span class="badge badge-write">writes</span></h4>
+        <p>Move or rename a note and, by default, rewrite every link in the vault that pointed at it. Run it with <code>dry_run</code> first to see which notes would be touched &mdash; a rename in a well linked vault can reach a surprising number of files.</p>
+        <p class="args"><b>path*</b> string &middot; <b>to*</b> string &middot; <b>update_links</b> boolean (default true) &middot; <b>overwrite</b> boolean &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_delete <span class="badge badge-write">writes</span></h4>
+        <p>Move a note to the vault's trash. Nothing is erased: a timestamped copy is kept in the internal trash directory, and with versioning on the change is a commit that can be reverted. Notes still linking to it are reported.</p>
+        <p class="args"><b>path*</b> string &middot; <b>content_hash</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_from_template <span class="badge badge-write">writes</span></h4>
+        <p>Create a note from a file in the vault's <code>templates/</code> directory, expanding <code>{{title}}</code>, <code>{{date}}</code>, <code>{{time}}</code>, <code>{{datetime}}</code>, <code>{{year}}</code>, <code>{{month}}</code>, <code>{{day}}</code> and <code>{{slug}}</code>. Call it without a template name to list the templates that exist.</p>
+        <p class="args"><b>template</b> string &middot; <b>path</b> string &middot; <b>title</b> string &middot; <b>tags</b> string[] &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <h3 id="t-capture">Capture</h3>
+
+      <div class="tool">
+        <h4>daily_note <span class="badge badge-write">writes</span></h4>
+        <p>Open the journal note for a day, creating it if needed, and optionally append to it. The path convention is <code>journal/YYYY/YYYY-MM-DD.md</code> in every layout.</p>
+        <p class="args"><b>date</b> string (default today) &middot; <b>append</b> string &middot; <b>heading</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="code" style="margin-bottom:14px">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">daily_note</span></div>
+<pre data-lang="json">{
+  "date": "2026-07-30",
+  "heading": "Log",
+  "append": "- 14:20 upgraded the reporting box to PG 17"
+}</pre>
+      </div>
+
+      <div class="tool">
+        <h4>daily_range <span class="badge badge-read">read</span></h4>
+        <p>Read the journal notes for a span of days in one call. Built for weekly and monthly reviews, where fetching seven notes individually is seven round trips and a lot of context spent on nothing.</p>
+        <p class="args"><b>from</b> string &middot; <b>to</b> string &middot; <b>empty</b> boolean (include days with no note)</p>
+      </div>
+
+      <div class="tool">
+        <h4>inbox_capture <span class="badge badge-write">writes</span></h4>
+        <p>Write something down without deciding where it belongs. Creates a timestamped note in <code>inbox/</code> and nothing else. Use it when the user says something worth keeping in passing &mdash; filing it properly can happen later, losing it cannot be undone.</p>
+        <p class="args"><b>text*</b> string &middot; <b>title</b> string &middot; <b>tags</b> string[] &middot; <b>source</b> string</p>
+      </div>
+
+      <h3 id="t-curation">Curation</h3>
+
+      <div class="tool">
+        <h4>vault_review <span class="badge badge-read">read</span></h4>
+        <p>The maintenance list for a vault: stubs, orphans, broken links, notes untouched for a long time and open tasks. A knowledge base decays quietly; this is how you see it happening.</p>
+        <p class="args"><b>stale_after</b> string (duration) &middot; <b>limit</b> integer &middot; <b>only</b> string</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_merge <span class="badge badge-write">writes</span></h4>
+        <p>Append one note's body into another, then delete the source and rewrite the links that pointed at it. The source's title is kept as an alias on the target, so old <code>[[wiki links]]</code> keep resolving. Use <code>dry_run</code> first.</p>
+        <p class="args"><b>path*</b> string (target) &middot; <b>from*</b> string (source) &middot; <b>heading</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_split <span class="badge badge-write">writes</span></h4>
+        <p>Split a long note into one note per heading at a chosen level, replacing each section in the original with a link to the new note. The cure for a note that has quietly become a directory.</p>
+        <p class="args"><b>path*</b> string &middot; <b>level</b> integer &middot; <b>dir</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <h3 id="t-tasks">Tasks</h3>
+
+      <div class="tool">
+        <h4>task_list <span class="badge badge-read">read</span></h4>
+        <p>Every <code>- [ ]</code> checkbox in the vault with its file and line number. Turns a pile of notes into a to-do list without a separate task system.</p>
+        <p class="args"><b>include_done</b> boolean &middot; <b>prefix</b> string &middot; <b>contains</b> string &middot; <b>limit</b> integer</p>
+      </div>
+
+      <div class="tool">
+        <h4>task_toggle <span class="badge badge-write">writes</span></h4>
+        <p>Mark a checkbox done or undone. Identify it by line number from <code>task_list</code>, or by its exact text if it is unique in the note.</p>
+        <p class="args"><b>path*</b> string &middot; <b>line</b> integer &middot; <b>text</b> string &middot; <b>done</b> boolean &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <h3 id="t-refactor">Refactoring and attachments</h3>
+
+      <div class="tool">
+        <h4>tag_rename <span class="badge badge-write">writes</span></h4>
+        <p>Rename a tag everywhere in the vault, in frontmatter and inline, or merge it into an existing one. <code>dry_run</code> defaults to <strong>true</strong>: this rewrites many files at once.</p>
+        <p class="args"><b>from*</b> string &middot; <b>to*</b> string &middot; <b>dry_run</b> boolean (default true)</p>
+      </div>
+
+      <div class="tool">
+        <h4>vault_replace <span class="badge badge-write">writes</span></h4>
+        <p>Find and replace a literal string or regular expression across every note. <code>dry_run</code> defaults to <strong>true</strong> and returns a diff per affected note, because a vault-wide replace is the single easiest way to damage a knowledge base.</p>
+        <p class="args"><b>pattern*</b> string &middot; <b>replace*</b> string &middot; <b>regex</b> boolean &middot; <b>prefix</b> string &middot; <b>limit</b> integer &middot; <b>dry_run</b> boolean (default true)</p>
+      </div>
+
+      <div class="code" style="margin-bottom:14px">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">vault_replace</span></div>
+<pre data-lang="json">-&gt; { "pattern": "old-domain\\.example",
+     "replace": "example.com",
+     "regex": true,
+     "prefix": "wiki/" }
+
+&lt;- { "dry_run": true, "notes": 23, "diff": "--- wiki/dns.md\n+++ ..." }</pre>
+      </div>
+
+      <div class="tool">
+        <h4>attachment_list <span class="badge badge-read">read</span></h4>
+        <p>Non-Markdown files in the vault &mdash; images, PDFs, exports &mdash; with size and which notes reference them.</p>
+        <p class="args"><b>prefix</b> string &middot; <b>limit</b> integer</p>
+      </div>
+
+      <div class="tool">
+        <h4>attachment_put <span class="badge badge-write">writes</span></h4>
+        <p>Write a base64 encoded file into the vault. Only a fixed set of extensions is accepted, and the limit is 32 MiB &mdash; a knowledge base is not a file share, and an agent that can write arbitrary bytes into a mounted volume is a bigger problem than the convenience is worth.</p>
+        <p class="args"><b>path*</b> string &middot; <b>data*</b> string (base64) &middot; <b>overwrite</b> boolean</p>
+      </div>
+
+      <h3 id="t-history">History</h3>
+
+      <div class="tool">
+        <h4>note_history <span class="badge badge-read">read</span></h4>
+        <p>The commits that touched a note, newest first, with the tool that caused each one. Available when versioning is enabled.</p>
+        <p class="args"><b>path*</b> string &middot; <b>limit</b> integer</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_diff <span class="badge badge-read">read</span></h4>
+        <p>Diff a note between two revisions, or between a revision and what is on disk now. Use it to answer "what did that edit actually change".</p>
+        <p class="args"><b>path*</b> string &middot; <b>from</b> string (revision) &middot; <b>to</b> string (revision, default working tree)</p>
+      </div>
+
+      <div class="tool">
+        <h4>note_restore <span class="badge badge-write">writes</span></h4>
+        <p>Bring a note back to how it looked at a given revision. The current version is not lost: it becomes the previous commit, and a copy goes to the trash.</p>
+        <p class="args"><b>path*</b> string &middot; <b>revision*</b> string &middot; <b>dry_run</b> boolean</p>
+      </div>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">recovering from a bad edit</span></div>
+<pre data-lang="json">-&gt; note_history { "path": "wiki/postgres.md", "limit": 3 }
+&lt;- [ { "revision": "8c41af2", "tool": "note_write",        "ts": "2026-07-30T14:02:11Z" },
+     { "revision": "1d9e07b", "tool": "note_section_edit", "ts": "2026-07-28T09:41:55Z" } ]
+
+-&gt; note_diff    { "path": "wiki/postgres.md", "from": "1d9e07b" }
+-&gt; note_restore { "path": "wiki/postgres.md", "revision": "1d9e07b", "dry_run": true }</pre>
+      </div>
+
+      <div class="note">
+        <strong>Thirty-four tools is a lot, and that is the argument.</strong> A server with <code>read_file</code> and <code>write_file</code> would be smaller and would push every decision about how to change a note onto the model. Each tool here exists because it makes one specific way of damaging a knowledge base unavailable.
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>&copy; <span data-year>2026</span> <a href="https://github.com/andreaskasper">Andreas Kasper</a> &middot; MIT licensed</div>
+    <nav class="foot-links">
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub</a>
+      <a href="https://github.com/andreaskasper/secondbrain/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

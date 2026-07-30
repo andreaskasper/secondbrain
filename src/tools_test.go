@@ -11,7 +11,8 @@ func testCtx(t *testing.T) *toolCtx {
 	t.Helper()
 	v := testVault(t)
 	cfg := &Config{DefaultVault: "default", MaxResponseBytes: 1 << 20, DataDir: filepath.Dir(v.Root)}
-	srv := &Server{vaults: &VaultManager{
+	v.metrics = NewMetrics()
+	srv := &Server{metrics: v.metrics, vaults: &VaultManager{
 		root: cfg.DataDir, defaultVault: "default", cfg: cfg,
 		vaults: map[string]*Vault{"default": v},
 	}, stop: make(chan struct{})}
@@ -319,5 +320,67 @@ func TestNoteMergeCarriesTagsAndAliases(t *testing.T) {
 	fm := read["frontmatter"].(map[string]any)
 	if fm["aliases"] == nil {
 		t.Error("the absorbed note's title was not kept as an alias")
+	}
+}
+
+func TestMetricsRenderIsValidExposition(t *testing.T) {
+	m := NewMetrics()
+	m.ObserveTool("note_search", "ok", 0.012, 400, false, false, false)
+	m.ObserveTool("note_write", "error", 0.003, 0, false, false, true)
+	m.ObserveHTTP("/mcp", 200)
+	m.ObserveLogin("success")
+	m.GitCommit()
+
+	out := m.Render(snapshot{
+		Version: "0.1.0", Commit: "abc", Users: 1, Tokens: 2, Sessions: 1,
+		Vaults: []vaultSnapshot{{Name: "default", Stats: &VaultStats{Notes: 12, Words: 900}}},
+	})
+
+	for _, must := range []string{
+		"# HELP secondbrain_build_info",
+		"# TYPE secondbrain_tool_calls_total counter",
+		`secondbrain_tool_calls_total{tool="note_search",outcome="ok"} 1`,
+		`secondbrain_vault_notes{vault="default"} 12`,
+		"secondbrain_git_commits_total 1",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("missing from the exposition output: %s", must)
+		}
+	}
+	// Every non-comment line must be `name value` or `name{labels} value`.
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if len(strings.Fields(line)) < 2 {
+			t.Errorf("malformed metric line: %q", line)
+		}
+	}
+}
+
+func TestMetricsAreOffByDefault(t *testing.T) {
+	t.Setenv("SECONDBRAIN_USERNAME", "a")
+	t.Setenv("SECONDBRAIN_PASSWORD", "password123")
+	t.Setenv("SECONDBRAIN_PUBLIC_URL", "https://example.com")
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Metrics {
+		t.Error("metrics must be off unless asked for")
+	}
+	if cfg.MetricsPath != "/metrics" {
+		t.Errorf("default metrics path = %q", cfg.MetricsPath)
+	}
+
+	t.Setenv("SECONDBRAIN_METRICS", "true")
+	t.Setenv("SECONDBRAIN_METRICS_KEY", "short")
+	if _, err := LoadConfig(""); err == nil {
+		t.Error("a short metrics key must be refused")
+	}
+	t.Setenv("SECONDBRAIN_METRICS_PATH", "/mcp")
+	t.Setenv("SECONDBRAIN_METRICS_KEY", "0123456789abcdef0123")
+	if _, err := LoadConfig(""); err == nil {
+		t.Error("a metrics path colliding with /mcp must be refused")
 	}
 }

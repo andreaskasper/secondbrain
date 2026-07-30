@@ -1,0 +1,324 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tracks src/go.mod. The Dockerfile pins the same minor version.
+  GO_VERSION: "1.25"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Formatting, vet, staticcheck, tests. The race detector is not optional:
+  # an fsnotify watcher, the HTTP handlers and the index writer all touch
+  # the same vault state concurrently.
+  # ---------------------------------------------------------------------
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: src/go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-formatted:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Verify go.mod is tidy
+        run: |
+          cp go.mod go.mod.bak
+          cp go.sum go.sum.bak
+          go mod tidy
+          if ! diff -q go.mod go.mod.bak >/dev/null || ! diff -q go.sum go.sum.bak >/dev/null; then
+            echo "::error::go.mod/go.sum are not tidy - run 'go mod tidy' in src/"
+            diff -u go.mod.bak go.mod || true
+            diff -u go.sum.bak go.sum || true
+            exit 1
+          fi
+          rm go.mod.bak go.sum.bak
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Test with race detector
+        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Coverage summary
+        run: |
+          total="$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')"
+          echo "Total coverage: $total"
+          echo "### Coverage: $total" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test the binary
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/secondbrain .
+          /tmp/secondbrain version
+          /tmp/secondbrain --help > /dev/null
+          # A bcrypt hash from hashpw has to be accepted by the config parser
+          # again, or every user who follows the documented path locks
+          # themselves out.
+          hash="$(printf 'correct-horse-battery' | /tmp/secondbrain hashpw)"
+          cat > /tmp/smoke.yaml <<EOF
+          public_url: "https://notes.example.com"
+          data_dir: "/tmp/sb-smoke"
+          users:
+            - name: ci
+              password: "$hash"
+              vaults: ["default"]
+          EOF
+          /tmp/secondbrain validate /tmp/smoke.yaml
+
+      - name: Reject an invalid config
+        run: |
+          # public_url is the contract every OAuth redirect is built from.
+          # A relative one has to fail loudly at startup rather than produce
+          # redirects nobody can follow.
+          cat > /tmp/bad.yaml <<'EOF'
+          public_url: "notes.example.com"
+          users:
+            - name: ci
+              password: "a-password"
+          EOF
+          if /tmp/secondbrain validate /tmp/bad.yaml; then
+            echo "::error::a relative public_url was accepted"
+            exit 1
+          fi
+          echo "invalid config correctly rejected"
+
+  # ---------------------------------------------------------------------
+  # The binary has to exist for both architectures people actually run
+  # this on: an amd64 server and an arm64 board or Apple machine.
+  # ---------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: src/go.sum
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags="-s -w -X main.version=ci -X main.commit=${GITHUB_SHA}" \
+            -o "/tmp/secondbrain-${GOOS}-${GOARCH}" .
+          ls -l "/tmp/secondbrain-${GOOS}-${GOARCH}"
+
+  # ---------------------------------------------------------------------
+  # Known vulnerabilities in dependencies and in the standard library.
+  # Filesystem mode rather than image mode: it sees go.sum directly, so a
+  # finding names the module to bump instead of a layer.
+  # ---------------------------------------------------------------------
+  scan:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: src/go.sum
+
+      - name: govulncheck
+        working-directory: src
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,config
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  # ---------------------------------------------------------------------
+  # The image has to build and the binary inside it has to run. It cannot
+  # be started with --read-only here the way aegis is: this container
+  # writes notes, an index and a git repository.
+  # ---------------------------------------------------------------------
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: secondbrain:ci
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run the image
+        run: |
+          docker run --rm secondbrain:ci version
+
+          # The data directory has to belong to the distroless nonroot user,
+          # UID 65532. Getting this wrong is the most common first-deployment
+          # failure, so CI does it the documented way.
+          mkdir -p "$RUNNER_TEMP/data"
+          sudo chown -R 65532:65532 "$RUNNER_TEMP/data"
+
+          docker run -d --name secondbrain-ci -p 2020:2020 \
+            -v "$RUNNER_TEMP/data:/data" \
+            -e SECONDBRAIN_USERNAME=ci \
+            -e SECONDBRAIN_PASSWORD=a-password \
+            -e SECONDBRAIN_PUBLIC_URL=http://localhost:2020 \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            secondbrain:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:2020/healthz >/dev/null 2>&1; then
+              echo "healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:2020/healthz
+          curl -fsS http://localhost:2020/.well-known/oauth-authorization-server | grep -q '"issuer"'
+
+          # The embedded icon must be served: MCP clients use it for the
+          # connector, and a missing one is a silent regression.
+          type="$(curl -fsS -o /dev/null -w '%{content_type}' http://localhost:2020/favicon.ico)"
+          if [ "$type" != "image/png" ]; then
+            echo "::error::/favicon.ico returned $type, expected image/png"
+            exit 1
+          fi
+
+          # Unauthenticated MCP access must be refused.
+          code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:2020/mcp -d '{}')"
+          if [ "$code" != "401" ]; then
+            echo "::error::unauthenticated /mcp returned $code, expected 401"
+            docker logs secondbrain-ci
+            exit 1
+          fi
+
+          # The default vault must have been created on the mounted volume,
+          # which also proves the container could write to it.
+          sudo test -d "$RUNNER_TEMP/data/default/.secondbrain" \
+            || { echo "::error::default vault was not created under /data"; exit 1; }
+          echo "container writes to /data as expected"
+
+      - name: Container logs
+        if: always()
+        run: docker logs secondbrain-ci || true
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f secondbrain-ci || true
+
+  # ---------------------------------------------------------------------
+  # End to end: the real OAuth dance and a run through the tools against a
+  # real vault on disk. Unit tests cannot catch a broken authorize page or
+  # a note that survives a section edit only in theory.
+  # ---------------------------------------------------------------------
+  e2e:
+    name: End-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: src/go.sum
+
+      - name: Build
+        working-directory: src
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/secondbrain" .
+
+      - name: Start the server
+        env:
+          SECONDBRAIN_USERNAME: andreas
+          SECONDBRAIN_PASSWORD: supersecret123
+          # The test asserts that the issuer in the metadata equals the
+          # address it called, so this has to be 127.0.0.1 and not localhost.
+          SECONDBRAIN_PUBLIC_URL: http://127.0.0.1:2020
+          SECONDBRAIN_LOG_LEVEL: debug
+        run: |
+          export SECONDBRAIN_DATA="$RUNNER_TEMP/data"
+          # Point the config path at a file that does not exist: the run must
+          # be driven purely by the environment, exactly as a single-user
+          # install is.
+          export SECONDBRAIN_CONFIG=/nonexistent.yaml
+          mkdir -p "$SECONDBRAIN_DATA"
+          "$RUNNER_TEMP/secondbrain" > "$RUNNER_TEMP/server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/server.pid"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:2020/healthz >/dev/null 2>&1; then
+              echo "healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:2020/healthz
+
+      - name: Run the end-to-end suite
+        run: python3 test/e2e.py
+
+      - name: Server log
+        if: always()
+        run: cat "$RUNNER_TEMP/server.log" || true
+
+      - name: Stop the server
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/server.pid")" 2>/dev/null || true

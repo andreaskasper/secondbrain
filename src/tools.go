@@ -152,6 +152,7 @@ func (s *Server) callTool(req rpcRequest, user *User, cfg *Config) *rpcResponse 
 			rec.Error = err.Error()
 			rec.DurationMS = time.Since(start).Milliseconds()
 			rec.emit()
+			s.metrics.ObserveTool(p.Name, "error", rec.seconds(), 0, false, false, t.Mutates)
 			return toolError(req.ID, err.Error())
 		}
 		ctx.vault = v
@@ -165,6 +166,7 @@ func (s *Server) callTool(req rpcRequest, user *User, cfg *Config) *rpcResponse 
 	if err != nil {
 		rec.Error = err.Error()
 		rec.emit()
+		s.metrics.ObserveTool(p.Name, "error", rec.seconds(), 0, rec.DryRun, false, t.Mutates)
 		return toolError(req.ID, err.Error())
 	}
 
@@ -172,6 +174,7 @@ func (s *Server) callTool(req rpcRequest, user *User, cfg *Config) *rpcResponse 
 	rec.Bytes = len(payload)
 	rec.Truncated = truncated
 	rec.emit()
+	s.metrics.ObserveTool(p.Name, "ok", rec.seconds(), len(payload), rec.DryRun, truncated, t.Mutates)
 
 	res := map[string]any{
 		"content": []map[string]any{{"type": "text", "text": payload}},

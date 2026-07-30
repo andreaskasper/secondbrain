@@ -246,7 +246,7 @@ func (v *Vault) Resolve(rel string) (string, error) {
 	if strings.ContainsRune(rel, 0) {
 		return "", fmt.Errorf("%w: path contains a null byte", errBadPath)
 	}
-	rel = strings.ReplaceAll(rel, "\\\\", "/")
+	rel = strings.ReplaceAll(rel, "\\", "/")
 	rel = strings.TrimPrefix(rel, "./")
 	if path.IsAbs(rel) {
 		return "", fmt.Errorf("%w: path must be relative to the vault", errBadPath)
@@ -280,7 +280,7 @@ func (v *Vault) Resolve(rel string) (string, error) {
 // ResolveNote is Resolve with the .md suffix supplied when it is missing, so
 // that "wiki/topic" and "wiki/topic.md" address the same note.
 func (v *Vault) ResolveNote(rel string) (string, string, error) {
-	rel = strings.TrimSpace(strings.ReplaceAll(rel, "\\\\", "/"))
+	rel = strings.TrimSpace(strings.ReplaceAll(rel, "\\", "/"))
 	if rel != "" && !strings.HasSuffix(strings.ToLower(rel), noteExt) {
 		rel += noteExt
 	}

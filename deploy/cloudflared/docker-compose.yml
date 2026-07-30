@@ -1,0 +1,100 @@
+# secondbrain behind a Cloudflare Tunnel
+#
+#   cp .env.example .env      and put your tunnel token in it
+#   docker compose up -d
+#
+# Nothing listens on the host. cloudflared opens an outbound connection to
+# Cloudflare and receives requests through it, so the server needs no open
+# port, no firewall exception and no certificate. For a process holding your
+# entire knowledge base, that is the smallest attack surface of the setups
+# here.
+#
+# In the Cloudflare Zero Trust dashboard, configure the tunnel's public
+# hostname to point at:
+#
+#     Service: HTTP    URL: secondbrain:2020
+#
+# "secondbrain" is the service name below - cloudflared resolves it over the
+# internal Docker network. HTTP is correct here: the hop is inside Docker,
+# and TLS is terminated by Cloudflare.
+
+name: secondbrain
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    networks:
+      - internal
+    depends_on:
+      - secondbrain
+    # cloudflared only needs outbound access and writes nothing.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    restart: unless-stopped
+
+    # No "ports:" and no host networking. The only way in is the tunnel.
+
+    environment:
+      # The hostname you configured on the tunnel, not the container name.
+      SECONDBRAIN_PUBLIC_URL: https://${SECONDBRAIN_HOST}
+      SECONDBRAIN_USERNAME: ${SECONDBRAIN_USERNAME:-andreas}
+      SECONDBRAIN_PASSWORD: ${SECONDBRAIN_PASSWORD:?set SECONDBRAIN_PASSWORD in .env}
+      SECONDBRAIN_LOG_LEVEL: ${SECONDBRAIN_LOG_LEVEL:-info}
+
+      SECONDBRAIN_GIT_REMOTE: ${SECONDBRAIN_GIT_REMOTE:-}
+      SECONDBRAIN_GIT_TOKEN: ${SECONDBRAIN_GIT_TOKEN:-}
+
+      RESEARCH_PASSWORD: ${RESEARCH_PASSWORD:-}
+
+    volumes:
+      - secondbrain-data:/data
+      #
+      # Bind mount instead if you want the vault in the host filesystem. The
+      # container runs as UID 65532 and will not start on a directory it
+      # cannot write:
+      #
+      #   mkdir -p ./data && sudo chown -R 65532:65532 ./data
+      #
+      # - ./data:/data
+      #
+      # Only needed for more than one user or for vault restrictions:
+      # - ./config.yaml:/etc/secondbrain/config.yaml:ro
+
+    # No read_only: this container writes notes, the search index and git.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "/secondbrain", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - internal
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  # A normal bridge network rather than internal: true. secondbrain makes
+  # outbound connections of its own when SECONDBRAIN_GIT_REMOTE is set, and
+  # cloudflared has to reach Cloudflare regardless.
+  internal:
+
+volumes:
+  secondbrain-data:

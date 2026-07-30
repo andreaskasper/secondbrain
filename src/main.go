@@ -37,9 +37,12 @@ type Server struct {
 	mcp      *mcpSessions
 	stop     chan struct{}
 
+	metrics *Metrics
+
 	loginLimiter    *KeyedLimiter
 	registerLimiter *KeyedLimiter
 	toolLimiter     *KeyedLimiter
+	metricsLimiter  *KeyedLimiter
 }
 
 func (s *Server) Config() *Config     { return s.cfg.Load() }
@@ -54,6 +57,7 @@ func NewServer(cfg *Config) (*Server, error) {
 		vaults:   vm,
 		sessions: NewSessionStore(),
 		mcp:      newMCPSessions(),
+		metrics:  NewMetrics(),
 		stop:     make(chan struct{}),
 	}
 	s.setConfig(cfg)
@@ -62,6 +66,9 @@ func NewServer(cfg *Config) (*Server, error) {
 	s.registerLimiter = NewKeyedLimiter(registerRate)
 	toolRate, _ := ParseRate("600/m")
 	s.toolLimiter = NewKeyedLimiter(toolRate)
+	metricsRate, _ := ParseRate("60/m")
+	s.metricsLimiter = NewKeyedLimiter(metricsRate)
+	vm.metrics = s.metrics
 	return s, nil
 }
 
@@ -75,8 +82,8 @@ func (s *Server) routes() http.Handler {
 		})
 	})
 	mux.HandleFunc("/favicon.ico", serveFavicon)
-	mux.HandleFunc("/favicon.png", serveFavicon)
-	mux.HandleFunc("/logo.png", serveFavicon)
+	mux.HandleFunc("/favicon.svg", serveFavicon)
+	mux.HandleFunc("/logo.svg", serveFavicon)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", s.handleProtectedResource)
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", s.handleProtectedResource)
 	mux.HandleFunc("/.well-known/oauth-authorization-server", s.handleAuthServerMetadata)
@@ -85,6 +92,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/authorize", s.handleAuthorize)
 	mux.HandleFunc("/token", s.handleToken)
 	mux.HandleFunc("/mcp", s.handleMCP)
+	// Only mounted on the main listener when metrics have no address of their
+	// own. Registering the route conditionally is the difference between "the
+	// endpoint is private" and "the endpoint is private and also 404s".
+	if cfg := s.Config(); cfg.Metrics && cfg.MetricsListen == "" {
+		mux.HandleFunc(cfg.MetricsPath, s.handleMetrics)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			writeHTTPError(w, http.StatusNotFound, "not found")
@@ -94,7 +107,7 @@ func (s *Server) routes() http.Handler {
 		fmt.Fprintf(w, "secondbrain %s\nMCP endpoint: %s\n", version, s.Config().endpoint("/mcp"))
 	})
 
-	return securityWrapper(mux)
+	return securityWrapper(s.observed(mux))
 }
 
 func securityWrapper(next http.Handler) http.Handler {
@@ -103,6 +116,56 @@ func securityWrapper(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// observed counts requests by route and status. The route label is the fixed
+// set below rather than r.URL.Path, because a label taken from user input is
+// how a metrics endpoint becomes a denial of service against its own scraper.
+func (s *Server) observed(next http.Handler) http.Handler {
+	known := map[string]bool{
+		"/healthz": true, "/mcp": true, "/register": true, "/authorize": true,
+		"/token": true, "/favicon.ico": true, "/favicon.svg": true, "/logo.svg": true, "/": true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		route := r.URL.Path
+		switch {
+		case known[route]:
+		case strings.HasPrefix(route, "/.well-known/"):
+			route = "/.well-known"
+		case route == s.Config().MetricsPath:
+			route = "metrics"
+		default:
+			route = "other"
+		}
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		s.metrics.ObserveHTTP(route, rec.status)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status  int
+	written bool
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if !r.written {
+		r.status, r.written = code, true
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	r.written = true
+	return r.ResponseWriter.Write(b)
+}
+
+// Flush keeps the SSE keep-alive working through the wrapper.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +228,10 @@ Environment:
   SECONDBRAIN_GIT            commit every change (default true)
   SECONDBRAIN_GIT_REMOTE     push to this remote after each commit
   SECONDBRAIN_GIT_TOKEN      token used for that push
+  SECONDBRAIN_METRICS        expose Prometheus metrics (default false)
+  SECONDBRAIN_METRICS_PATH   where, on the listener (default /metrics)
+  SECONDBRAIN_METRICS_KEY    shared key a scraper must present
+  SECONDBRAIN_METRICS_LISTEN bind metrics to their own address instead
   SECONDBRAIN_LOG_LEVEL      debug|info|warn|error
 `)
 }
@@ -205,6 +272,9 @@ func run() int {
 
 	go s.sessions.RunJanitor(s.stop)
 	go s.housekeeping()
+	if cfg.Metrics && cfg.MetricsListen != "" {
+		go s.startMetricsListener(cfg.MetricsListen)
+	}
 	if cfg.Source != "environment" {
 		go s.watchConfig(cfg.Source)
 	}
@@ -217,6 +287,7 @@ func run() int {
 		"data_dir":   cfg.DataDir,
 		"vaults":     names,
 		"git":        cfg.Git,
+		"metrics":    cfg.Metrics,
 		"config":     cfg.Source,
 	})
 
@@ -256,6 +327,7 @@ func (s *Server) housekeeping() {
 			retention := s.Config().TrashRetention
 			for _, v := range s.vaults.List(nil) {
 				if n := v.PurgeTrash(retention); n > 0 {
+					s.metrics.TrashPurged(n)
 					logInfo("trash_purged", map[string]any{"vault": v.Name, "removed": n})
 				}
 			}
@@ -326,6 +398,19 @@ func cmdValidate(path string) int {
 	fmt.Printf("  data_dir:      %s\n", cfg.DataDir)
 	fmt.Printf("  default_vault: %s\n", cfg.DefaultVault)
 	fmt.Printf("  git:           %v\n", cfg.Git)
+	if cfg.Metrics {
+		where := "the main listener"
+		if cfg.MetricsListen != "" {
+			where = cfg.MetricsListen
+		}
+		guard := "no key set"
+		if cfg.MetricsKey != "" {
+			guard = "key required"
+		}
+		fmt.Printf("  metrics:       %s on %s (%s)\n", cfg.MetricsPath, where, guard)
+	} else {
+		fmt.Printf("  metrics:       off\n")
+	}
 	if len(cfg.AllowedOrigins) > 0 {
 		fmt.Printf("  origins:       %s\n", strings.Join(cfg.AllowedOrigins, ", "))
 	}

@@ -1,22 +1,19 @@
 ---
 name: secondbrain
 description: >-
-  Work with the user's knowledge base through the `secondbrain` MCP server — a
+  Work with the user's knowledge base through the `secondbrain` MCP server: a
   vault of plain Markdown notes with full-text search, backlinks, tags, daily
-  notes, tasks and git history. Use this skill whenever the user wants anything
-  done with their second brain, knowledge base, notes, vault, wiki or
-  zettelkasten: capturing a passing thought, writing a daily/journal note,
-  distilling a source into a wiki note, linking notes together, retagging,
-  renaming, splitting or merging notes, reviewing what is rotting, ticking a
-  task off, or undoing a bad edit. Triggers in English: "second brain",
-  "knowledge base", "my notes", "my vault", "my wiki", "zettelkasten",
-  "what do I know about X", "add this to my notes", "search my notes",
-  "capture this", "note this down", "daily note", "weekly review",
-  "what's in my inbox". Triggers in German: "Wissensbasis", "Notizen",
-  "Vault", "zweites Gehirn", "merk dir das", "notier das", "such in meinen
-  Notizen", "schreib das in mein Wiki", "was weiß ich über X", "Tagesnotiz",
-  "ab in die Inbox", "Wochenrückblick". Also use proactively when the user
-  drops an idea, a link or a fact that clearly belongs in their knowledge base.
+  notes, tasks and git history. Use it whenever the user wants something done
+  with their second brain, notes, vault, wiki or zettelkasten - capturing a
+  thought, writing a journal note, distilling a source, linking notes,
+  retagging, renaming, splitting or merging, reviewing what is rotting, ticking
+  a task off, or undoing a bad edit. English triggers: "second brain",
+  "knowledge base", "my notes", "my vault", "what do I know about X", "add this
+  to my notes", "search my notes", "capture this", "daily note", "weekly
+  review". German triggers: "Wissensbasis", "Notizen", "zweites Gehirn", "merk
+  dir das", "such in meinen Notizen", "schreib das in mein Wiki", "was weiss
+  ich ueber X", "Tagesnotiz", "ab in die Inbox". Also use proactively when the
+  user drops an idea, link or fact that belongs in their knowledge base.
 ---
 
 # secondbrain

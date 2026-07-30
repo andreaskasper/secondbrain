@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment &mdash; secondbrain</title>
+<meta name="description" content="Running secondbrain behind Traefik with Let's Encrypt, behind a Cloudflare Tunnel, or behind Cloudflare in front of Traefik. Volumes, backups, the UID 65532 chown, git remotes and migrating an Obsidian vault in.">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Deployment &mdash; secondbrain">
+<meta property="og:description" content="Three working reverse-proxy setups, backups, and the UID 65532 mistake everybody makes once.">
+<meta property="og:image" content="https://andreaskasper.github.io/secondbrain/logo.svg">
+<meta property="og:url" content="https://andreaskasper.github.io/secondbrain/deploy.html">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="logo.svg" alt=""> secondbrain</a>
+    <div class="header-actions">
+      <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+    <nav class="nav">
+      <a href="index.html">Overview</a>
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html" aria-current="page">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub&nbsp;&rarr;</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap doc-layout">
+
+  <aside class="toc">
+    <strong>On this page</strong>
+    <a href="#uid">The volume, first</a>
+    <a href="#traefik">Traefik + Let's Encrypt</a>
+    <a href="#tunnel">Cloudflare Tunnel</a>
+    <a href="#cf-traefik">Cloudflare + Traefik</a>
+    <a href="#backups">Volumes and backups</a>
+    <a href="#git">Git remote</a>
+    <a href="#metrics">Prometheus</a>
+    <a href="#client">Pointing Claude at it</a>
+    <a href="#migrate">Migrating a vault in</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+  </aside>
+
+  <div class="doc-body">
+
+    <section id="uid">
+      <h1 style="font-size:clamp(1.9rem,4vw,2.6rem)">Deployment</h1>
+      <p class="lede">secondbrain speaks plain HTTP on port 2020 and never terminates TLS. Something has to sit in front of it. Here are three setups that work, and the details that bite &mdash; starting with the one that bites almost everybody exactly once.</p>
+
+      <p>Ready-to-run files for all of this live in <a href="https://github.com/andreaskasper/secondbrain/tree/main/deploy">deploy/</a> in the repository.</p>
+
+      <h2>The volume, first</h2>
+
+      <div class="note warn">
+        <strong>Run <code>chown -R 65532:65532</code> on the data directory before the first start.</strong> The image is distroless and the process runs as the nonroot user, UID 65532. A bind mount created by Docker belongs to <code>root:root</code>, the first attempt to create the index fails with a permission error, and the container restarts in a loop with a message that does not obviously say "chown". This is the most common way a first deployment fails.
+      </div>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">mkdir -p /srv/secondbrain/data
+sudo chown -R 65532:65532 /srv/secondbrain/data
+sudo chmod 700 /srv/secondbrain/data      # these are your private notes</pre>
+      </div>
+
+      <p>Two consequences worth knowing before you build habits around it:</p>
+      <ul>
+        <li><strong>Anything you copy in later needs the same treatment.</strong> Unpacking a backup or an Obsidian vault into the directory as root recreates the problem for the new files. Run the <code>chown</code> again afterwards; it is cheap and idempotent.</li>
+        <li><strong>A named Docker volume avoids it entirely</strong>, because Docker initialises the volume from the image and the ownership comes out right. Bind mounts are still worth it if you want the notes at a path you can open in an editor &mdash; which, for this project, is usually the point.</li>
+      </ul>
+
+      <h3>What the container cannot do</h3>
+      <p>Unlike its sibling <a href="https://github.com/andreaskasper/aegis">aegis</a>, this container cannot run with <code>read_only: true</code>. It writes notes, an index and a git repository; that is its job. Everything else still applies: drop all capabilities, forbid privilege escalation, and run as the non-root user.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">the hardening that does apply</span></div>
+<pre data-lang="yaml">    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]</pre>
+      </div>
+    </section>
+
+    <section id="traefik">
+      <h2>Traefik with Let's Encrypt</h2>
+      <p>The straightforward setup: Traefik holds the certificate, secondbrain never sees the outside world, and port 2020 is not published at all. Note the absence of a <code>ports:</code> key on the secondbrain service &mdash; publishing it would make the plain-HTTP port reachable next to the TLS one, which defeats the exercise.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">services:
+  traefik:
+    image: traefik:v3
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.le.acme.email=you@example.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+    ports: ["80:80", "443:443"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    restart: unless-stopped
+
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    volumes:
+      - ./data:/data
+    environment:
+      SECONDBRAIN_PUBLIC_URL: https://brain.example.com
+      SECONDBRAIN_USERNAME: andreas
+      SECONDBRAIN_PASSWORD: "bcrypt:$2a$12$..."
+      SECONDBRAIN_GIT: "true"
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sb.rule=Host(`brain.example.com`)"
+      - "traefik.http.routers.sb.entrypoints=websecure"
+      - "traefik.http.routers.sb.tls.certresolver=le"
+      - "traefik.http.services.sb.loadbalancer.server.port=2020"
+    restart: unless-stopped</pre>
+      </div>
+
+      <p><code>SECONDBRAIN_PUBLIC_URL</code> must be the URL a browser sees, not the container address. The OAuth discovery documents are generated from it, and a client that is told to fetch a token from <code>http://secondbrain:2020/token</code> will not get very far.</p>
+    </section>
+
+    <section id="tunnel">
+      <h2>Cloudflare Tunnel</h2>
+      <p>Nothing is published, no port is open, and the connection to Cloudflare is outbound. For a knowledge base on a machine behind a home router this is usually the right answer: there is no listening socket on the internet to find.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN}"
+    depends_on: [secondbrain]
+    restart: unless-stopped
+
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    volumes:
+      - ./data:/data
+    environment:
+      SECONDBRAIN_PUBLIC_URL: https://brain.example.com
+      SECONDBRAIN_USERNAME: andreas
+      SECONDBRAIN_PASSWORD: "bcrypt:$2a$12$..."
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped</pre>
+      </div>
+
+      <p>In the Cloudflare dashboard the tunnel's public hostname maps to the service <code>http://secondbrain:2020</code> on the Compose network. Two settings deserve attention:</p>
+      <ul>
+        <li><strong>Do not put Cloudflare Access in front of <code>/mcp</code>.</strong> Access answers unauthenticated requests with an HTML login page, and an MCP client that expects JSON gets an HTML document with a 200 status and no useful error. If you want Access, scope it to paths this server does not use.</li>
+        <li><strong>Raise the idle timeout.</strong> Streamable HTTP holds a connection open while the model thinks. A proxy that closes it at 30 seconds turns a long tool call into a disconnect.</li>
+      </ul>
+    </section>
+
+    <section id="cf-traefik">
+      <h2>Cloudflare in front of Traefik</h2>
+      <p>The third arrangement keeps Traefik and its certificate but turns Cloudflare's orange cloud on, so the origin address is hidden and TLS terminates twice. It is a reasonable middle ground when the machine already runs Traefik for other services.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">services:
+  traefik:
+    image: traefik:v3
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls.certresolver=le"
+      - "--certificatesresolvers.le.acme.email=you@example.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.dnschallenge=true"
+      - "--certificatesresolvers.le.acme.dnschallenge.provider=cloudflare"
+    environment:
+      CF_DNS_API_TOKEN: "${CF_DNS_API_TOKEN}"
+    ports: ["443:443"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    restart: unless-stopped
+
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    volumes:
+      - ./data:/data
+    environment:
+      SECONDBRAIN_PUBLIC_URL: https://brain.example.com
+      SECONDBRAIN_USERNAME: andreas
+      SECONDBRAIN_PASSWORD: "bcrypt:$2a$12$..."
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sb.rule=Host(`brain.example.com`)"
+      - "traefik.http.routers.sb.entrypoints=websecure"
+      - "traefik.http.services.sb.loadbalancer.server.port=2020"
+    restart: unless-stopped</pre>
+      </div>
+
+      <p>Set the Cloudflare SSL mode to <em>Full (strict)</em>. The ACME challenge has to be DNS-based here, because the HTTP challenge would be answered by Cloudflare rather than by Traefik. Cloudflare's default proxy timeouts are longer than a tunnel's but still finite; if long tool calls are cut off, that is where to look first.</p>
+
+      <div class="note">
+        <strong>Two proxies mean two places to raise a timeout and two places that can buffer.</strong> If something works with the tunnel and not here, compare the response headers before changing anything in the container: the difference is almost always in front of it.
+      </div>
+    </section>
+
+    <section id="backups">
+      <h2>Volumes and backups</h2>
+      <p>There is exactly one directory to back up, and it is readable without this software. That is the property worth preserving: a backup you can restore with <code>tar</code> and read with <code>cat</code> is a backup you will still be able to use in five years.</p>
+
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Path</th><th>Back it up?</th></tr></thead>
+          <tbody>
+            <tr><td><code>/data/&lt;vault&gt;/**.md</code></td><td>Yes. This is everything that matters.</td></tr>
+            <tr><td><code>/data/&lt;vault&gt;/attachments/</code></td><td>Yes. Images and PDFs are not reproducible.</td></tr>
+            <tr><td><code>/data/&lt;vault&gt;/.git/</code></td><td>Yes, if you want history. Losing it costs the past, not the present.</td></tr>
+            <tr><td><code>/data/&lt;vault&gt;/.secondbrain/trash/</code></td><td>Optional. It is a thirty-day safety net, not an archive.</td></tr>
+            <tr><td><code>/data/&lt;vault&gt;/.secondbrain/index.db</code></td><td>No. It is a cache; it rebuilds from the files.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell"># Stop nothing. Writes are atomic and commits are small, so a copy taken
+# while the server runs is at worst missing the last few seconds.
+tar czf brain-$(date +%F).tar.gz \
+  --exclude='.secondbrain/index.db' \
+  -C /srv/secondbrain data
+
+# Restoring: unpack, then fix ownership again.
+tar xzf brain-2026-07-30.tar.gz -C /srv/secondbrain
+sudo chown -R 65532:65532 /srv/secondbrain/data</pre>
+      </div>
+
+      <p>Do not run two containers against the same data directory. The index reconciles against the filesystem and the watcher will keep both copies broadly correct, but two git repositories committing into one working tree will not end well.</p>
+    </section>
+
+    <section id="git">
+      <h2>Git remote</h2>
+      <p>With <code>SECONDBRAIN_GIT_REMOTE</code> set, every commit is pushed as it is made. That is an off-site copy of a knowledge base with no scheduler, no backup agent and no window during which the last hour of work exists in one place only.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">    environment:
+      SECONDBRAIN_GIT: "true"
+      SECONDBRAIN_GIT_REMOTE: "https://github.com/andreaskasper/brain-personal.git"
+      SECONDBRAIN_GIT_TOKEN: "${GITHUB_TOKEN}"
+      SECONDBRAIN_GIT_AUTHOR: "secondbrain"
+      SECONDBRAIN_GIT_EMAIL: "brain@example.com"</pre>
+      </div>
+
+      <ul>
+        <li><strong>Use a private repository.</strong> This is being said because it will otherwise be forgotten once: the push contains the full text of every note.</li>
+        <li><strong>Scope the token to that one repository</strong> and give it write access to nothing else. A fine-grained token costs a minute and bounds what a compromised container can reach.</li>
+        <li><strong>One remote per vault.</strong> Vaults are separate repositories, so a work vault and a private vault can push to different places, or one can push and the other can stay on the machine.</li>
+        <li><strong>Pulling is yours.</strong> The server pushes; it does not pull on a timer. If you edit the repository elsewhere, pull into the data directory yourself &mdash; the watcher will reindex what changes.</li>
+      </ul>
+    </section>
+
+    <section id="metrics">
+      <h2>Prometheus</h2>
+      <p>Metrics are off until you ask for them, and when they are on the right place for them is a port that never leaves the Docker network. Bind them to a second listener with <code>SECONDBRAIN_METRICS_LISTEN</code>, publish only the MCP port, and let the scraper reach the metrics port over the Compose network. The alternative &mdash; adding a route to the reverse proxy that already faces the internet &mdash; means the endpoint's only protection is a shared key on a host you also have to keep patched, instead of a port that was never mapped in the first place.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">services:
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    ports: ["2020:2020"]        # only the MCP port is published
+    expose: ["9090"]            # reachable inside this network, not from the host
+    volumes:
+      - ./data:/data
+    environment:
+      SECONDBRAIN_PUBLIC_URL: https://brain.example.com
+      SECONDBRAIN_METRICS: "true"
+      SECONDBRAIN_METRICS_LISTEN: ":9090"
+      SECONDBRAIN_METRICS_KEY: "file:/run/secrets/metrics_key"
+    secrets: [metrics_key]
+    user: "65532:65532"
+    cap_drop: [ALL]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./metrics.key:/etc/prometheus/secondbrain.key:ro
+    restart: unless-stopped
+
+secrets:
+  metrics_key:
+    file: ./metrics.key</pre>
+      </div>
+
+      <p>The key is a file on both sides, which keeps it out of <code>docker inspect</code> and out of your shell history. It must be at least sixteen characters or the server refuses to start; a trailing newline is trimmed at both ends, so the obvious command is correct:</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">openssl rand -hex 32 > metrics.key
+chmod 600 metrics.key
+sudo chown 65532:65532 metrics.key</pre>
+      </div>
+
+      <p>Prometheus reads the same file and sends it as a bearer token. <code>credentials_file</code> rather than <code>credentials</code>, so the key is not in the scrape configuration you might one day paste into an issue:</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">prometheus.yml</span></div>
+<pre data-lang="yaml">scrape_configs:
+  - job_name: secondbrain
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secondbrain.key
+    static_configs:
+      - targets: ["secondbrain:9090"]</pre>
+      </div>
+
+      <div class="note">
+        <strong>Prefer the second listener to the key.</strong> The two compose and both are worth having, but they are not equal. A port bound inside the Docker network and never mapped cannot be reached from outside whatever the key is; a key protects an endpoint that is already reachable. With <code>metrics_listen</code> set, the route is registered on that listener alone, so the public URL answers a genuine 404 on <code>/metrics</code> rather than a 401 &mdash; there is nothing there to guess at. Because that decision is made at startup, switching metrics on is a restart of the container, not a reload.
+      </div>
+
+      <p>Check it from inside the network before pointing Prometheus at it, and confirm from outside that the path is not there at all:</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">docker compose exec prometheus wget -qO- \
+  --header="Authorization: Bearer $(cat metrics.key)" \
+  http://secondbrain:9090/metrics | head
+
+curl -s -o /dev/null -w '%{http_code}\n' https://brain.example.com/metrics   # expect 404</pre>
+      </div>
+
+      <p><a href="docs.html#metrics">The metrics documentation</a> lists every gauge and counter, and says which of them are worth an alert.</p>
+    </section>
+
+    <section id="client">
+      <h2>Pointing Claude at it</h2>
+      <p>Add the server URL with <code>/mcp</code> appended. There is nothing to paste beyond that: the client fetches the discovery documents, registers itself, and opens the login page in a browser.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">connector URL</span></div>
+<pre data-lang="shell">https://brain.example.com/mcp</pre>
+      </div>
+
+      <p>The first connection is worth watching. On <code>initialize</code> the server returns the vault's <code>.secondbrain/instructions.md</code>, so the client is told the conventions of your knowledge base &mdash; where raw material goes, where distilled notes go, how journal entries are named &mdash; before it does anything. If that text is wrong, edit the file; it is a Markdown file like any other, and it is the highest-leverage file in the vault.</p>
+
+      <p>Verifying by hand, before involving a client:</p>
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">curl -s https://brain.example.com/.well-known/oauth-protected-resource | head
+curl -s -o /dev/null -w '%{http_code}\n' https://brain.example.com/mcp   # expect 401</pre>
+      </div>
+
+      <p>A 401 with a <code>WWW-Authenticate</code> header is the correct answer there. An HTML page instead means something in front of the container is intercepting the request &mdash; Cloudflare Access, most often.</p>
+    </section>
+
+    <section id="migrate">
+      <h2>Migrating an Obsidian vault in</h2>
+      <p>The file format is the one you already have, so migration is a copy. The only work is deciding what not to copy.</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell"># 1. Create the vault directory. The name must match [a-z0-9][a-z0-9_-]{0,63}
+mkdir -p /srv/secondbrain/data/personal
+
+# 2. Copy the notes. Leave Obsidian's own state behind: it is machine
+#    specific, and no tool here can read inside a dot directory anyway.
+rsync -a --exclude '.obsidian/' --exclude '.trash/' --exclude '.DS_Store' \
+  ~/Documents/MyVault/ /srv/secondbrain/data/personal/
+
+# 3. Ownership, again.
+sudo chown -R 65532:65532 /srv/secondbrain/data/personal
+
+# 4. Start the container. The index builds on first start; a few thousand
+#    notes take seconds.
+docker compose up -d</pre>
+      </div>
+
+      <p>Then create the instructions file the vault would otherwise have got from a layout. An imported vault has conventions, but they are in your head:</p>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">data/personal/.secondbrain/instructions.md</span></div>
+<pre data-lang="md"># This vault
+
+Raw material lives in `sources/` and is never edited after capture.
+Distilled notes live in `wiki/`, one subject per note, titled as a noun.
+Journal entries are `journal/YYYY/YYYY-MM-DD.md`.
+
+Search before creating. If a note about the subject exists, add a section
+to it with note_section_edit rather than starting a second one.</pre>
+      </div>
+
+      <p>A few notes on what to expect afterwards:</p>
+      <ul>
+        <li><strong>Existing frontmatter is left alone.</strong> Notes without any are never given <code>created</code> or <code>updated</code> fields, so an imported vault does not come back with several thousand modified files.</li>
+        <li><strong>Broken links surface immediately.</strong> Run <code>vault_review</code> once after the import; a vault that has been carried across two apps usually has some.</li>
+        <li><strong>Obsidian can stay open on the same directory.</strong> The watcher exists for exactly that. Both programs writing the same note at the same second is still a bad idea, but ordinary use is not a conflict.</li>
+        <li><strong>Plugins that store data outside Markdown do not come across.</strong> Anything a plugin kept in <code>.obsidian/</code> is not part of the notes, and this server will never see it.</li>
+      </ul>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>Troubleshooting</h2>
+      <div class="table-wrap wrap-first">
+        <table>
+          <thead><tr><th>Symptom</th><th>Cause</th></tr></thead>
+          <tbody>
+            <tr><td>Container restarts in a loop, permission errors in the log</td><td>The data directory does not belong to 65532. See <a href="#uid">the top of this page</a>.</td></tr>
+            <tr><td>The client registers but the login page never loads</td><td><code>SECONDBRAIN_PUBLIC_URL</code> does not match the URL the browser uses. It must be the external URL, with no trailing slash.</td></tr>
+            <tr><td>An HTML page where JSON was expected</td><td>Cloudflare Access, or another authenticating proxy, in front of <code>/mcp</code>.</td></tr>
+            <tr><td>Long tool calls disconnect</td><td>An idle timeout in the proxy. Raise it; the connection is held open while the model works.</td></tr>
+            <tr><td>Search finds nothing in a freshly imported vault</td><td>The first index build is still running, or the notes landed one directory deeper than intended. <code>vault_stats</code> answers both.</td></tr>
+            <tr><td>Search results are stale after an external edit</td><td>Some filesystems do not deliver inotify events &mdash; network mounts in particular. Run <code>secondbrain reindex</code>, and prefer local storage for the data directory.</td></tr>
+            <tr><td>Every session is gone after a restart</td><td>Expected. Tokens live in memory only; the client will re-register and ask you to sign in.</td></tr>
+            <tr><td>Pushes to the git remote fail</td><td>The token expired or lacks write access to that one repository. The commit itself succeeded locally; only the push is missing.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>&copy; <span data-year>2026</span> <a href="https://github.com/andreaskasper">Andreas Kasper</a> &middot; MIT licensed</div>
+    <nav class="foot-links">
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub</a>
+      <a href="https://github.com/andreaskasper/secondbrain/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

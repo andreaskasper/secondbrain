@@ -407,3 +407,11 @@ func (s *SessionStore) RunJanitor(stop <-chan struct{}) {
 		}
 	}
 }
+
+// Counts reports how much is currently held in memory, for the metrics
+// endpoint. Numbers only - no identifiers ever leave this function.
+func (s *SessionStore) Counts() (access, refresh, clients int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.tokens), len(s.refresh), len(s.clients)
+}

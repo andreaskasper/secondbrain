@@ -58,8 +58,9 @@ type Vault struct {
 	Name string
 	Root string
 
-	idx *Index
-	git *GitStore
+	idx     *Index
+	git     *GitStore
+	metrics *Metrics
 
 	// writeMu serialises mutations within a vault. Reads are unaffected;
 	// the cost of a global write lock per vault is nothing next to the cost
@@ -71,6 +72,7 @@ type VaultManager struct {
 	root         string
 	defaultVault string
 	cfg          *Config
+	metrics      *Metrics
 
 	mu     sync.RWMutex
 	vaults map[string]*Vault
@@ -128,7 +130,7 @@ func (m *VaultManager) open(name string) (*Vault, error) {
 	if v, ok := m.vaults[name]; ok {
 		return v, nil
 	}
-	v := &Vault{Name: name, Root: filepath.Join(m.root, name)}
+	v := &Vault{Name: name, Root: filepath.Join(m.root, name), metrics: m.metrics}
 	if err := os.MkdirAll(filepath.Join(v.Root, internalDir), 0o755); err != nil {
 		return nil, err
 	}

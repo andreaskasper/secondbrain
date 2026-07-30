@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap &mdash; secondbrain</title>
+<meta name="description" content="What is in v1, what is committed for later, what is only under consideration, and one idea that was rejected on purpose along with the reason.">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Roadmap &mdash; secondbrain">
+<meta property="og:description" content="Committed, considered and deliberately rejected, kept apart on purpose.">
+<meta property="og:image" content="https://andreaskasper.github.io/secondbrain/logo.svg">
+<meta property="og:url" content="https://andreaskasper.github.io/secondbrain/roadmap.html">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="logo.svg" alt=""> secondbrain</a>
+    <div class="header-actions">
+      <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+    <nav class="nav">
+      <a href="index.html">Overview</a>
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html" aria-current="page">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub&nbsp;&rarr;</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap doc-layout">
+
+  <aside class="toc">
+    <strong>On this page</strong>
+    <a href="#v1">v1</a>
+    <a href="#committed">Committed</a>
+    <a href="#considered">Under consideration</a>
+    <a href="#rejected">Rejected</a>
+    <a href="#open">Open questions</a>
+    <a href="#contributing">Contributing</a>
+  </aside>
+
+  <div class="doc-body">
+
+    <section id="v1">
+      <h1 style="font-size:clamp(1.9rem,4vw,2.6rem)">Roadmap</h1>
+      <p class="lede">Everything below is judged by one question: does it make the knowledge base better, or does it only make this program bigger? The notes are the product. A feature that adds state this server owns exclusively has to justify itself twice.</p>
+      <p class="lede">The three headings below mean different things. <strong>Committed</strong> is work that will happen. <strong>Under consideration</strong> is not a promise. <strong>Rejected</strong> is a decision, recorded so it does not have to be argued again.</p>
+
+      <h2>v1 &mdash; done</h2>
+      <div class="grid grid-2" style="margin-top:22px">
+        <div class="card">
+          <h3>Storage</h3>
+          <p>Plain Markdown with Obsidian-compatible frontmatter, wikilinks, tags and checkboxes. One directory per vault, four starting layouts, atomic writes, structural path validation, a trash with a retention window.</p>
+        </div>
+        <div class="card">
+          <h3>Search</h3>
+          <p>SQLite FTS5 with BM25 ranking and snippets, reconciled at start and kept live by a debounced fsnotify watcher, plus a regular-expression fallback for everything a tokeniser cannot see.</p>
+        </div>
+        <div class="card">
+          <h3>Safe editing</h3>
+          <p>Content hashes, exact-string edits that refuse ambiguity, eight section-edit modes, <code>dry_run</code> on every mutating tool and defaulted to true on the two that touch a whole vault.</p>
+        </div>
+        <div class="card">
+          <h3>Versioning</h3>
+          <p>One git repository per vault, one commit per write naming the tool and the path, optional push to a remote after every commit, and three tools over that history.</p>
+        </div>
+        <div class="card">
+          <h3>Identity</h3>
+          <p>OAuth 2.1 with discovery, dynamic client registration, PKCE and an HTML login page. Tokens in memory only. Multiple users, each scoped to named vaults, each optionally read-only.</p>
+        </div>
+        <div class="card">
+          <h3>Operations</h3>
+          <p>Environment-first configuration, an optional config file, <code>validate</code> and <code>reindex</code> subcommands, one metadata-only audit line per tool call, and a distroless non-root image.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="committed">
+      <h2>Committed</h2>
+      <p>Work that will happen, in roughly this order. Each is here because v1 left a deliberate hole for it.</p>
+
+      <h3>Semantic search over the reserved embeddings table</h3>
+      <p>The index schema already contains an <code>embeddings</code> table with nothing in it. That was not an accident: it means turning semantic search on later is a data migration rather than a schema one, and that nobody has to rebuild an index from scratch to get it.</p>
+      <p>The shape is settled even though the implementation is not. It will be <strong>opt-in and off by default</strong>, and it will support two sources:</p>
+      <ul>
+        <li><strong>Local.</strong> A small embedding model reached over a socket on the same host &mdash; Ollama or anything with a compatible endpoint. No notes leave the machine.</li>
+        <li><strong>Hosted.</strong> An OpenAI-compatible embeddings endpoint, configured with a URL and a key.</li>
+      </ul>
+      <p>The hosted option deserves a warning attached to it in the documentation and here. It would be the first outbound network request this server has ever made, and what it would send is the text of your notes. That is a genuine change to the threat model described on the <a href="security.html#network">security page</a>, which is exactly why it must be a decision you make explicitly rather than a default you inherit. FTS5 stays the primary index either way; embeddings extend <code>note_search</code> and <code>note_related</code>, they do not replace them.</p>
+
+      <h3>Per-directory access control</h3>
+      <p>Today access is per vault: a user who may open a vault reads every note in it. That is the honest limit named on the <a href="security.html#limits">security page</a>, and it is the most requested thing this project does not do. Rules of the form "this user may read <code>projects/**</code> and write nothing else" would make a single shared vault safe to give to a narrower agent, and would remove the current advice to split a vault whenever the access needs differ.</p>
+      <p>It is committed because it is the only limit on the list that people are likely to hit in normal use. It comes after semantic search because it touches every tool rather than one subsystem, and because a rule engine that is subtly wrong is worse than no rule engine at all.</p>
+
+      <h3>MCP resources and prompts</h3>
+      <p>v1 implements tools and nothing else, which was the right place to stop. Two parts of the protocol clearly fit afterwards:</p>
+      <ul>
+        <li><strong>Resources.</strong> Notes as addressable resources, so a client can attach one to a conversation directly instead of asking a tool to read it. Cheaper, and it lets the client show the user what was attached.</li>
+        <li><strong>Prompts.</strong> The operations that are always the same sequence &mdash; the weekly review over <code>daily_range</code>, the cleanup pass over <code>vault_review</code>, capture-and-file &mdash; expressed as named prompts rather than reinvented by every agent.</li>
+      </ul>
+      <p>Vault instructions already travel with the vault. Prompts are the same idea, one level up.</p>
+
+      <h3>Incremental git gc</h3>
+      <p>A commit per write means a repository with a great many small commits. Nothing goes wrong for a long time, and then one day a vault with tens of thousands of loose objects makes every git operation slow, which makes <code>note_history</code> and <code>note_restore</code> slow. Running <code>git gc</code> from cron works but is a thing you have to know about.</p>
+      <p>The plan is unglamorous and therefore likely to be right: a bounded, incremental repack triggered by loose-object count, run in the background, never blocking a tool call, and skipped entirely while a push is in flight. Housekeeping that nobody has to be told about is the point.</p>
+    </section>
+
+    <section id="considered">
+      <h2>Under consideration</h2>
+      <p>None of these are promised. Each would be added only if it turns out to be needed in practice rather than merely reasonable on paper.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Idea</th><th>Why it might be worth it, and what stops it</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Import from Notion and Evernote</td>
+              <td>The people most likely to want a knowledge base in plain files are the people who currently do not have one. Notion's Markdown export and Evernote's ENEX are both convertible, and both lose things &mdash; databases become tables, nested pages become directories, Evernote's HTML becomes approximate Markdown. The hesitation is not the conversion; it is that a lossy import runs once, produces thousands of files, and is judged by its worst note. It may belong in a separate tool that writes into a vault rather than in the server itself.</td>
+            </tr>
+            <tr>
+              <td>Scheduled review digests</td>
+              <td>A weekly summary of what changed, what went stale and which links broke &mdash; the output of <code>vault_review</code> and <code>daily_range</code>, produced without anyone asking. The problem is that the server would need a scheduler and a way to deliver the result, and delivery means an outbound request. Writing the digest into the vault as a note avoids that neatly and is the version most likely to happen, if any does.</td>
+            </tr>
+            <tr>
+              <td>Backlink maintenance on external edits</td>
+              <td>The watcher reindexes when a file changes underneath the server, but a note renamed in Obsidian leaves the links pointing at the old name, exactly as Obsidian would. Detecting a rename and offering to fix the links would be genuinely useful and is genuinely hard to do without guessing.</td>
+            </tr>
+            <tr>
+              <td>Per-vault tool subsets</td>
+              <td>An archive vault that offers only reading tools, independent of the user's own permissions. Small, plausible, and possibly redundant once per-directory rules exist.</td>
+            </tr>
+            <tr>
+              <td>Attachment extraction</td>
+              <td>Text out of PDFs and images so that attachments become searchable. It would mean either a large dependency or an outbound call, and both are expensive for a feature whose absence is a mild annoyance.</td>
+            </tr>
+            <tr>
+              <td>A second index for structured queries</td>
+              <td>Frontmatter fields as columns, so "every note with <code>status: draft</code> older than a month" is one query. Today that is <code>note_search</code> plus filtering by the agent, which works and costs context.</td>
+            </tr>
+            <tr>
+              <td>Conflict detection for concurrent editors</td>
+              <td>Content hashes catch the case the server can see. Two people editing the same note in two Obsidian instances is a synchronisation problem this server did not create and cannot solve, but it could at least notice and say so.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="rejected">
+      <h2>Deliberately rejected</h2>
+
+      <div class="card" style="margin-top:22px">
+        <h3>A read-only browse UI</h3>
+        <p>The suggestion is reasonable on its face: the server already has an index, a search engine and an HTTP listener, so a small web page that lists notes and renders one would be a couple of hundred lines. It has been rejected, and the reason is worth recording.</p>
+        <p style="margin-top:.8rem">A browse UI would be the first component of this project whose value depends on the software running. Everything else here is a lens over files you can already read: Obsidian renders them, an editor opens them, <code>grep</code> searches them, a forge displays them if you push the git remote. A web UI does not add a way to read your notes &mdash; it adds a <em>worse</em> way, because it will always be behind the tools that exist for exactly this and that you probably already have open.</p>
+        <p style="margin-top:.8rem">And the cost is real. Rendering notes in a browser means a templating layer, HTML sanitising for Markdown that can contain anything, session handling for a browser rather than an API client, CSRF, and a new class of vulnerability in a process that currently exposes one JSON endpoint and a login form. It would be the largest attack surface in the project, added to serve a use case that is already served.</p>
+        <p style="margin-top:.8rem">If a knowledge base needs its own viewer, something has gone wrong with the format. The correct answer to "I want to read my notes in a browser" is to point a static site generator at the directory, or to push to a git remote and read them there.</p>
+      </div>
+
+      <div class="grid grid-3" style="margin-top:18px">
+        <div class="card">
+          <h3>A proprietary storage format</h3>
+          <p>A database would make search faster and edits cheaper. It would also make the notes unreadable without this program, which is the one thing that must never be true.</p>
+        </div>
+        <div class="card">
+          <h3>Automatic organisation</h3>
+          <p>Moving, retagging or merging notes without being asked. A knowledge base whose structure changes on its own is one you stop trusting, and trust is the whole asset.</p>
+        </div>
+        <div class="card">
+          <h3>A hosted service</h3>
+          <p>Somebody else's server holding your private notes is the shape this project exists to argue against. It runs on your machine, or it does not run.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="open">
+      <h2>Open questions</h2>
+      <p>Genuinely undecided. Opinions from people running this are more useful than more thinking about it.</p>
+      <ul>
+        <li><strong>Should a vault be able to disable tools in its instructions file?</strong> It would let a vault say "no automatic merging here" and have that travel with the directory. It also puts a security-relevant decision in a file an agent can write, which is exactly the wrong place for one.</li>
+        <li><strong>How much should <code>note_related</code> change when embeddings arrive?</strong> Shared tags and co-citation give explainable results; embeddings give better ones you cannot explain. Blending them may produce the worst of both.</li>
+        <li><strong>Is thirty days the right trash retention?</strong> Long enough to notice a deletion, long enough that a vault used heavily accumulates a fair amount of it.</li>
+        <li><strong>Should <code>note_write</code> exist at all?</strong> It is the only tool that can replace a note wholesale, it already requires a hash, and every use of it could be a section edit. Removing it would be a strong statement and would occasionally be infuriating.</li>
+      </ul>
+    </section>
+
+    <section id="contributing">
+      <h2>Contributing</h2>
+      <p>Issues and pull requests are welcome at <a href="https://github.com/andreaskasper/secondbrain">the repository</a>. The most valuable report is a description of how a real vault behaved badly &mdash; an edit that lost something, a search that could not find an obvious note, a layout that did not fit how you work. Those are hard to invent and easy to fix once seen.</p>
+      <p>A pull request that adds a tool should say which failure mode the tool makes impossible. That is the standard the existing thirty-four were held to, and it is the reason there are thirty-four rather than four.</p>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>&copy; <span data-year>2026</span> <a href="https://github.com/andreaskasper">Andreas Kasper</a> &middot; MIT licensed</div>
+    <nav class="foot-links">
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub</a>
+      <a href="https://github.com/andreaskasper/secondbrain/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

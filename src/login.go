@@ -107,6 +107,7 @@ func (s *Server) authorizeSubmit(w http.ResponseWriter, r *http.Request) {
 
 	ip := clientIP(r)
 	if ok, _ := s.loginLimiter.Allow(ip); !ok {
+		s.metrics.ObserveLogin("rate_limited")
 		logWarn("login_failed", map[string]any{"reason": "rate_limited", "ip": ip})
 		renderLogin(w, http.StatusTooManyRequests, loginView{
 			ClientName:  c.Name,
@@ -124,6 +125,7 @@ func (s *Server) authorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	user := cfg.Users[username]
 
 	if !VerifyPassword(user, password) {
+		s.metrics.ObserveLogin("failed")
 		logWarn("login_failed", map[string]any{"ip": ip, "client_id": clientID})
 		renderLogin(w, http.StatusUnauthorized, loginView{
 			ClientName:  c.Name,
@@ -136,6 +138,7 @@ func (s *Server) authorizeSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	code := s.sessions.NewCode(user.Name, clientID, redirectURI, entry.challenge, cfg.CodeTTL)
+	s.metrics.ObserveLogin("success")
 	logInfo("login_success", map[string]any{"user": user.Name, "client_id": clientID, "ip": ip})
 
 	u, err := url.Parse(redirectURI)
@@ -280,10 +283,10 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in - secondbrain</title>
-<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style nonce="{{.Nonce}}">` + pageCSS + `</style></head>
 <body><main class="card">
-<img class="mark" src="/favicon.png" alt="" width="56" height="56">
+<img class="mark" src="/favicon.svg" alt="" width="56" height="56">
 <h1>secondbrain</h1>
 <p class="sub">{{if .ClientName}}<strong>{{.ClientName}}</strong> is requesting access on your behalf.{{else}}Sign in to continue.{{end}}</p>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
@@ -323,10 +326,10 @@ var errorTemplate = template.Must(template.New("error").Parse(`<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Error - secondbrain</title>
-<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style nonce="{{.Nonce}}">` + pageCSS + `</style></head>
 <body><main class="card">
-<img class="mark" src="/favicon.png" alt="" width="56" height="56">
+<img class="mark" src="/favicon.svg" alt="" width="56" height="56">
 <h1>secondbrain</h1>
 <p class="sub">Authorization could not continue.</p>
 <div class="err">{{.Message}}</div>

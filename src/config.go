@@ -72,6 +72,14 @@ type Config struct {
 	GitEmail  string `yaml:"git_email"`
 	GitToken  string `yaml:"git_token"`
 
+	// Metrics are off by default: an endpoint reporting how many notes
+	// somebody has and when they last wrote one is not something to expose
+	// unasked.
+	Metrics       bool   `yaml:"metrics"`
+	MetricsPath   string `yaml:"metrics_path"`
+	MetricsKey    string `yaml:"metrics_key"`
+	MetricsListen string `yaml:"metrics_listen"`
+
 	Users map[string]*User `yaml:"-"`
 
 	RawUsers []*User `yaml:"users"`
@@ -129,6 +137,7 @@ func LoadConfig(path string) (*Config, error) {
 		CodeTTL:          defaultCodeTTL,
 		TrashRetention:   defaultTrashRetain,
 		Git:              true,
+		MetricsPath:      "/metrics",
 		GitAuthor:        "secondbrain",
 		GitEmail:         "secondbrain@localhost",
 		Users:            map[string]*User{},
@@ -204,6 +213,26 @@ func (c *Config) applyEnv() error {
 	setString(&c.GitRemote, "SECONDBRAIN_GIT_REMOTE")
 	setString(&c.GitAuthor, "SECONDBRAIN_GIT_AUTHOR")
 	setString(&c.GitEmail, "SECONDBRAIN_GIT_EMAIL")
+	setString(&c.MetricsPath, "SECONDBRAIN_METRICS_PATH")
+	setString(&c.MetricsListen, "SECONDBRAIN_METRICS_LISTEN")
+
+	if v := os.Getenv("SECONDBRAIN_METRICS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("SECONDBRAIN_METRICS must be true or false")
+		}
+		c.Metrics = b
+	}
+	if v := os.Getenv("SECONDBRAIN_METRICS_KEY"); v != "" {
+		c.MetricsKey = v
+	}
+	if c.MetricsKey != "" {
+		resolved, err := resolveSecret(c.MetricsKey)
+		if err != nil {
+			return fmt.Errorf("metrics_key: %w", err)
+		}
+		c.MetricsKey = resolved
+	}
 
 	if v := os.Getenv("SECONDBRAIN_GIT_TOKEN"); v != "" {
 		c.GitToken = v
@@ -338,6 +367,26 @@ func (c *Config) validate() error {
 	}
 	if c.MaxResponseBytes < 4096 {
 		return fmt.Errorf("max_response_bytes must be at least 4096")
+	}
+	if c.Metrics {
+		if !strings.HasPrefix(c.MetricsPath, "/") {
+			return fmt.Errorf("metrics_path must start with a slash")
+		}
+		if c.MetricsPath == "/mcp" || c.MetricsPath == "/healthz" || c.MetricsPath == "/" {
+			return fmt.Errorf("metrics_path %q collides with an existing route", c.MetricsPath)
+		}
+		if c.MetricsKey == "" && c.MetricsListen == "" {
+			// Neither a key nor a private listener means the endpoint is
+			// reachable by anyone who can reach the server. Say so once, at
+			// startup, rather than let it be discovered later.
+			logWarn("metrics_unprotected", map[string]any{
+				"path": c.MetricsPath,
+				"hint": "set SECONDBRAIN_METRICS_KEY, or bind metrics to a private address with SECONDBRAIN_METRICS_LISTEN",
+			})
+		}
+		if c.MetricsKey != "" && len(c.MetricsKey) < 16 {
+			return fmt.Errorf("metrics_key must be at least 16 characters")
+		}
 	}
 	return nil
 }

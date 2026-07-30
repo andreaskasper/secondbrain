@@ -409,3 +409,9 @@ func readLimited(r *http.Request, limit int64) ([]byte, error) {
 	}
 	return b, nil
 }
+
+func (m *mcpSessions) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.byID)
+}

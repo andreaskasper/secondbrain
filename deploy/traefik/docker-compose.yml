@@ -1,0 +1,116 @@
+# secondbrain behind Traefik with Let's Encrypt
+#
+#   cp .env.example .env      and fill it in
+#   docker compose up -d
+#
+# secondbrain publishes no port: only Traefik can reach it, over the internal
+# network. Everything from the outside arrives on 443 and is terminated by
+# Traefik. The container itself never speaks TLS.
+
+name: secondbrain
+
+services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      # Uncomment while testing, so a broken setup does not burn the
+      # Let's Encrypt rate limit:
+      # - --certificatesresolvers.le.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only: Traefik only needs to watch for container labels.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    networks:
+      - edge
+
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    restart: unless-stopped
+
+    # Deliberately no "ports:" - secondbrain must not be reachable except
+    # through Traefik. Publishing 2020 here would put a plaintext OAuth
+    # endpoint on the open internet.
+
+    environment:
+      # This has to be the public URL, not the container address: every
+      # OAuth redirect is derived from it.
+      SECONDBRAIN_PUBLIC_URL: https://${SECONDBRAIN_HOST}
+      SECONDBRAIN_USERNAME: ${SECONDBRAIN_USERNAME:-andreas}
+      SECONDBRAIN_PASSWORD: ${SECONDBRAIN_PASSWORD:?set SECONDBRAIN_PASSWORD in .env}
+      SECONDBRAIN_LOG_LEVEL: ${SECONDBRAIN_LOG_LEVEL:-info}
+
+      # Off by default. Set a remote and a token to have every commit pushed
+      # to a repository you control, which turns the backup question into
+      # somebody else's problem.
+      SECONDBRAIN_GIT_REMOTE: ${SECONDBRAIN_GIT_REMOTE:-}
+      SECONDBRAIN_GIT_TOKEN: ${SECONDBRAIN_GIT_TOKEN:-}
+
+      # Referenced as env: from config.yaml, if you use one.
+      RESEARCH_PASSWORD: ${RESEARCH_PASSWORD:-}
+
+    volumes:
+      - secondbrain-data:/data
+      #
+      # Bind mount instead if you want the vault visible in the host
+      # filesystem, for example to sync it to a laptop. The container runs as
+      # UID 65532 and will not start on a directory it cannot write:
+      #
+      #   mkdir -p ./data && sudo chown -R 65532:65532 ./data
+      #
+      # - ./data:/data
+      #
+      # Only needed for more than one user or for vault restrictions:
+      # - ./config.yaml:/etc/secondbrain/config.yaml:ro
+
+    # No read_only: this container writes notes, the search index and git.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "/secondbrain", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - edge
+
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.secondbrain.rule: "Host(`${SECONDBRAIN_HOST}`)"
+      traefik.http.routers.secondbrain.entrypoints: websecure
+      traefik.http.routers.secondbrain.tls.certresolver: le
+      traefik.http.services.secondbrain.loadbalancer.server.port: "2020"
+      # Health check so Traefik stops routing to a container that is not
+      # serving yet - a first start reconciles the index against the
+      # filesystem and can take a moment on a large vault.
+      traefik.http.services.secondbrain.loadbalancer.healthcheck.path: /healthz
+      traefik.http.services.secondbrain.loadbalancer.healthcheck.interval: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  edge:
+
+volumes:
+  letsencrypt:
+  secondbrain-data:

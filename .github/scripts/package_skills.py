@@ -15,6 +15,11 @@ import re
 import sys
 import zipfile
 
+try:
+    import yaml
+except ImportError:                     # PyYAML is preinstalled on the runners
+    yaml = None                         # but the script still works without it
+
 SKILLS_DIR = "skills"
 
 # A fixed timestamp, not the file's own. Zip stores mtimes, and a checkout
@@ -29,6 +34,13 @@ EXCLUDE_SUFFIXES = (".pyc", ".swp", ".skill")
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
+# The installer refuses a longer description, and it refuses it at install time
+# rather than at build time - which is the worst moment to find out. Checking
+# here turns a user-facing failure into a failed CI run.
+MAX_DESCRIPTION = 1024
+MIN_DESCRIPTION = 40
+MAX_NAME = 64
+
 
 def fail(msg):
     print(f"::error::{msg}")
@@ -36,11 +48,14 @@ def fail(msg):
 
 
 def read_frontmatter(path):
-    """Pull the YAML frontmatter out of SKILL.md without requiring PyYAML.
+    """Pull the YAML frontmatter out of SKILL.md.
 
-    Only the two fields that matter are parsed. A full YAML parse would be
-    stricter, but it would also make this script depend on something that has
-    to be installed first, for no gain at this level of checking.
+    PyYAML is used when it is available, because the folded value it produces
+    is exactly what the installer will measure - and a length check against a
+    slightly different string is a check that passes here and fails there. The
+    hand-rolled fallback keeps the script usable without the dependency; it
+    joins folded lines the same way, so it is accurate to within the trailing
+    newline.
     """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -50,6 +65,15 @@ def read_frontmatter(path):
     if end < 0:
         return None
     block = text[text.index("\n", 3) + 1:end]
+
+    if yaml is not None:
+        try:
+            parsed = yaml.safe_load(block)
+        except yaml.YAMLError as exc:
+            fail(f"{path}: the frontmatter is not valid YAML: {exc}")
+        if not isinstance(parsed, dict):
+            return None
+        return {k: (v if isinstance(v, str) else str(v)) for k, v in parsed.items()}
 
     fields, key = {}, None
     for line in block.splitlines():
@@ -130,10 +154,19 @@ def main():
         if declared != name:
             fail(f"{name}/SKILL.md: frontmatter says name: {declared!r}, "
                  f"but the directory is {name!r}. They have to agree.")
+        if len(declared) > MAX_NAME:
+            fail(f"{name}/SKILL.md: the name is longer than {MAX_NAME} characters")
+
         # The description is what a model matches on when deciding whether to
-        # load the skill. A thin one is a skill that never triggers.
-        if len(fields["description"]) < 40:
+        # load the skill. A thin one is a skill that never triggers - and one
+        # over the limit is a skill that will not install at all.
+        described = fields["description"].strip()
+        if len(described) < MIN_DESCRIPTION:
             fail(f"{name}/SKILL.md: the description is too short to route on")
+        if len(described) > MAX_DESCRIPTION:
+            fail(f"{name}/SKILL.md: the description is {len(described)} characters, "
+                 f"and the limit is {MAX_DESCRIPTION}. Drop the weakest trigger "
+                 f"phrases first - they are the least load-bearing part of it.")
 
         before = None
         if os.path.exists(dest):
@@ -146,7 +179,8 @@ def main():
             after = hashlib.sha256(fh.read()).hexdigest()
         size = os.path.getsize(dest)
         state = "unchanged" if before == after else ("updated" if before else "new")
-        print(f"{dest:<48} {len(files):>3} files  {size:>7} bytes  {state}")
+        print(f"{dest:<40} {len(files):>3} files  {size:>7} bytes  "
+              f"desc {len(described):>4}/{MAX_DESCRIPTION}  {state}")
         built.append((name, state))
 
     changed = [n for n, s in built if s != "unchanged"]

@@ -116,9 +116,13 @@ func (w *Watcher) run() {
 }
 
 func (w *Watcher) flush(batch map[string]bool) {
+	w.vault.metrics.WatchEvents(len(batch))
 	if batch["*"] || len(batch) > 50 {
 		if err := w.vault.idx.Reconcile(w.vault); err != nil {
+			w.vault.metrics.IndexError()
 			logWarn("reconcile_failed", map[string]any{"vault": w.vault.Name, "error": err.Error()})
+		} else {
+			w.vault.metrics.IndexReconciled()
 		}
 		return
 	}

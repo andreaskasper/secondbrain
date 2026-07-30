@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secondbrain &mdash; a knowledge base your agent can actually work in</title>
+<meta name="description" content="secondbrain is an MCP server that gives an LLM agent structured access to a knowledge base of plain Markdown files: full-text search, section-level edits, content hashes, dry runs, a trash and a git commit per change.">
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="secondbrain &mdash; a knowledge base your agent can actually work in">
+<meta property="og:description" content="The notes are the product. This program is a lens over them.">
+<meta property="og:image" content="https://andreaskasper.github.io/secondbrain/logo.svg">
+<meta property="og:url" content="https://andreaskasper.github.io/secondbrain/">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="logo.svg" alt=""> secondbrain</a>
+    <div class="header-actions">
+      <button class="icon-btn nav-toggle" type="button" aria-expanded="false" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="icon-btn theme-toggle" type="button" aria-label="Switch theme">
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </div>
+    <nav class="nav">
+      <a href="index.html" aria-current="page">Overview</a>
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub&nbsp;&rarr;</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ===================== hero ===================== -->
+<section class="hero">
+  <div class="neurons" aria-hidden="true">
+    <svg viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid slice" focusable="false">
+      <g>
+        <path class="n-edge" d="M90 120 Q170 150 250 210"/>
+        <path class="n-edge" d="M90 120 Q210 90 330 90"/>
+        <path class="n-edge" d="M60 300 Q150 250 250 210"/>
+        <path class="n-edge" d="M60 300 Q140 340 230 390"/>
+        <path class="n-edge" d="M140 470 Q180 425 230 390"/>
+        <path class="n-edge" d="M140 470 Q250 500 360 515"/>
+        <path class="n-edge" d="M250 210 Q320 250 400 300"/>
+        <path class="n-edge" d="M230 390 Q310 350 400 300"/>
+        <path class="n-edge" d="M330 90 Q400 70 470 60"/>
+        <path class="n-edge" d="M330 90 Q420 120 520 170"/>
+        <path class="n-edge" d="M470 60 Q500 110 520 170"/>
+        <path class="n-edge" d="M400 300 Q460 230 520 170"/>
+        <path class="n-edge" d="M400 300 Q480 360 560 425"/>
+        <path class="n-edge" d="M360 515 Q460 475 560 425"/>
+        <path class="n-edge" d="M520 170 Q590 230 660 300"/>
+        <path class="n-edge" d="M560 425 Q610 360 660 300"/>
+        <path class="n-edge" d="M520 170 Q610 130 700 110"/>
+        <path class="n-edge" d="M660 300 Q760 260 860 220"/>
+        <path class="n-edge" d="M660 300 Q780 350 900 405"/>
+        <path class="n-edge" d="M700 110 Q780 160 860 220"/>
+        <path class="n-edge" d="M770 515 Q835 460 900 405"/>
+        <path class="n-edge" d="M860 220 Q930 170 1010 120"/>
+        <path class="n-edge" d="M860 220 Q960 270 1060 325"/>
+        <path class="n-edge" d="M900 405 Q980 365 1060 325"/>
+        <path class="n-edge" d="M900 405 Q1020 445 1140 485"/>
+        <path class="n-edge" d="M1010 120 Q1080 155 1150 190"/>
+        <path class="n-edge" d="M1060 325 Q1105 258 1150 190"/>
+      </g>
+      <g>
+        <path class="n-signal n-signal-a" d="M90 120 Q170 150 250 210" style="animation-delay:-0.4s"/>
+        <path class="n-signal n-signal-b" d="M250 210 Q320 250 400 300" style="animation-delay:-3.1s"/>
+        <path class="n-signal n-signal-a" d="M400 300 Q460 230 520 170" style="animation-delay:-6.2s"/>
+        <path class="n-signal n-signal-b" d="M520 170 Q590 230 660 300" style="animation-delay:-1.7s;animation-duration:11s"/>
+        <path class="n-signal n-signal-a" d="M660 300 Q760 260 860 220" style="animation-delay:-4.9s"/>
+        <path class="n-signal n-signal-b" d="M860 220 Q960 270 1060 325" style="animation-delay:-7.8s;animation-duration:12s"/>
+        <path class="n-signal n-signal-a" d="M60 300 Q140 340 230 390" style="animation-delay:-2.3s;animation-duration:13s"/>
+        <path class="n-signal n-signal-b" d="M400 300 Q480 360 560 425" style="animation-delay:-5.6s"/>
+        <path class="n-signal n-signal-a" d="M660 300 Q780 350 900 405" style="animation-delay:-8.4s;animation-duration:10s"/>
+        <path class="n-signal n-signal-b" d="M900 405 Q1020 445 1140 485" style="animation-delay:-0.9s;animation-duration:14s"/>
+      </g>
+      <g>
+        <circle class="n-halo" cx="250" cy="210" r="13" style="animation-delay:-1.2s"/>
+        <circle class="n-halo n-halo-b" cx="660" cy="300" r="15" style="animation-delay:-3.4s"/>
+        <circle class="n-halo" cx="900" cy="405" r="12" style="animation-delay:-4.8s"/>
+        <circle class="n-halo n-halo-b" cx="520" cy="170" r="12" style="animation-delay:-2.1s"/>
+      </g>
+      <g>
+        <circle class="n-node" cx="90" cy="120" r="3.5" style="animation-delay:-0.3s"/>
+        <circle class="n-node n-node-b" cx="60" cy="300" r="3" style="animation-delay:-1.9s"/>
+        <circle class="n-node" cx="140" cy="470" r="3.2" style="animation-delay:-3.5s"/>
+        <circle class="n-node" cx="250" cy="210" r="4.2" style="animation-delay:-0.9s"/>
+        <circle class="n-node n-node-b" cx="230" cy="390" r="3.4" style="animation-delay:-4.2s"/>
+        <circle class="n-node" cx="330" cy="90" r="3" style="animation-delay:-2.6s"/>
+        <circle class="n-node n-node-b" cx="470" cy="60" r="2.6" style="animation-delay:-5.1s"/>
+        <circle class="n-node" cx="400" cy="300" r="4.6" style="animation-delay:-1.4s"/>
+        <circle class="n-node" cx="360" cy="515" r="3" style="animation-delay:-3.9s"/>
+        <circle class="n-node n-node-b" cx="520" cy="170" r="4" style="animation-delay:-2.2s"/>
+        <circle class="n-node" cx="560" cy="425" r="3.6" style="animation-delay:-4.7s"/>
+        <circle class="n-node n-node-b" cx="660" cy="300" r="5" style="animation-delay:-0.6s"/>
+        <circle class="n-node" cx="700" cy="110" r="3" style="animation-delay:-3.1s"/>
+        <circle class="n-node" cx="770" cy="515" r="3.2" style="animation-delay:-5.4s"/>
+        <circle class="n-node n-node-b" cx="860" cy="220" r="4.2" style="animation-delay:-1.7s"/>
+        <circle class="n-node" cx="900" cy="405" r="4" style="animation-delay:-4.4s"/>
+        <circle class="n-node" cx="1010" cy="120" r="3" style="animation-delay:-2.9s"/>
+        <circle class="n-node n-node-b" cx="1060" cy="325" r="3.8" style="animation-delay:-0.2s"/>
+        <circle class="n-node" cx="1150" cy="190" r="3" style="animation-delay:-3.7s"/>
+        <circle class="n-node n-node-b" cx="1140" cy="485" r="3.2" style="animation-delay:-5.9s"/>
+      </g>
+    </svg>
+  </div>
+
+  <div class="wrap">
+    <img class="hero-logo" src="logo.svg" alt="secondbrain logo">
+    <div class="pill"><span class="dot"></span> v1 &middot; MCP over Streamable HTTP &middot; Go &middot; MIT</div>
+    <h1>Your notes stay Markdown.<br><span class="grad">The agent learns to read them.</span></h1>
+    <p class="lede">secondbrain is an MCP server that gives an LLM structured access to a knowledge base of plain files on disk. The notes are the product; this program is a lens over them. Delete the container and you still have a directory you can open in Obsidian, grep, or commit.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="docs.html#quick-start">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        Get started
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/andreaskasper/secondbrain">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7 0-.7 0-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2 0-.4-.5-1.6.2-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.6.2 2.8.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.1.9 2.3v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+        Source
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== problem ===================== -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">The problem</p>
+    <h2>Two wrong shapes for a memory</h2>
+    <p class="lede" style="margin-bottom:26px">A chat assistant with no memory starts every conversation from nothing, so the same context gets pasted in again and again and the useful parts of it are lost when the window closes. The obvious fix &mdash; put the memory inside the assistant &mdash; produces the other wrong shape: a store you can only reach through the product that owns it.</p>
+    <p class="lede" style="margin-bottom:36px">A knowledge base you cannot read without its software is a hostage, not an asset. The test is simple: if the vendor disappears tomorrow, or the container will not start, what is left? With secondbrain what is left is a directory of Markdown files with the same names, the same headings and the same links as before. Everything the server keeps for itself lives in <code>&lt;vault&gt;/.secondbrain/</code> and can be deleted without losing anything.</p>
+
+    <div class="compare">
+      <div class="without">
+        <h3><span class="tag tag-bad">Without</span> Memory owned by an app</h3>
+        <ul>
+          <li>Nothing survives the chat window, so the same context is pasted in every time</li>
+          <li>Or it survives, but only inside a proprietary store with an export button you have never tested</li>
+          <li>Your editor, your scripts and your backups cannot see any of it</li>
+          <li>An agent rewriting a whole document can drop a paragraph and nobody notices for months</li>
+          <li>No history: the note is simply different now</li>
+          <li>The conventions of your knowledge base live in a system prompt somewhere else</li>
+        </ul>
+      </div>
+      <div class="with">
+        <h3><span class="tag tag-good">With secondbrain</span> Memory owned by you</h3>
+        <ul>
+          <li>Files on disk, one Markdown file per note, readable with <code>cat</code></li>
+          <li>Obsidian compatible: wikilinks, frontmatter, tags, checkboxes, attachments</li>
+          <li>The index, the trash and the instructions are a cache; delete them and nothing is lost</li>
+          <li>Edits are scoped to a section or an exact string, and refused when they are ambiguous</li>
+          <li>Every write is a git commit naming the tool and the path</li>
+          <li>Each vault ships its own instructions to the client on connect</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== how it works ===================== -->
+<section style="background:var(--bg-elev);border-block:1px solid var(--border)">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>A lens over a directory</h2>
+    <p class="lede" style="margin-bottom:34px">An agent editing prose fails differently from an agent editing code. Wrong code does not compile; a wrong edit to a note is a paragraph that quietly disappears. Almost every design decision here exists to make that failure mode impossible rather than unlikely.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 900 300" role="img" aria-label="Flow diagram: an MCP client calls secondbrain on port 2020, which reads and writes Markdown files under the data volume, commits every change to git, and reindexes when the files change underneath it.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path class="d-arrow" d="M0 0 L10 5 L0 10 z"/>
+          </marker>
+          <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path class="d-arrow-accent" d="M0 0 L10 5 L0 10 z"/>
+          </marker>
+        </defs>
+
+        <rect class="d-box" x="14" y="70" width="184" height="84" rx="12"/>
+        <text class="d-text" x="106" y="106" text-anchor="middle">LLM agent</text>
+        <text class="d-sub" x="106" y="126" text-anchor="middle">Claude, any MCP client</text>
+
+        <rect class="d-box-accent" x="352" y="54" width="196" height="116" rx="12"/>
+        <text class="d-text" x="450" y="90" text-anchor="middle">secondbrain :2020</text>
+        <text class="d-sub" x="450" y="111" text-anchor="middle">search &middot; hash &middot; dry run</text>
+        <text class="d-sub" x="450" y="128" text-anchor="middle">atomic write &middot; trash</text>
+        <text class="d-sub" x="450" y="145" text-anchor="middle">commit &middot; audit</text>
+
+        <rect class="d-box" x="702" y="70" width="184" height="84" rx="12"/>
+        <text class="d-text" x="794" y="106" text-anchor="middle">/data/&lt;vault&gt;</text>
+        <text class="d-sub" x="794" y="126" text-anchor="middle">*.md &middot; .git &middot; attachments</text>
+
+        <rect class="d-box" x="366" y="222" width="168" height="52" rx="10"/>
+        <text class="d-sub" x="450" y="245" text-anchor="middle" style="font-size:11.5px">.secondbrain/</text>
+        <text class="d-sub" x="450" y="261" text-anchor="middle">index.db &middot; trash &middot; rules</text>
+        <path class="d-line" d="M450 222 L450 170" stroke-dasharray="4 4"/>
+
+        <path class="d-line-accent" d="M198 96 L344 96" marker-end="url(#arrA)"/>
+        <text class="d-label" x="271" y="86" text-anchor="middle">note_section_edit</text>
+        <path class="d-line" d="M344 134 L206 134" marker-end="url(#arr)"/>
+        <text class="d-label" x="271" y="154" text-anchor="middle">diff + content_hash</text>
+
+        <path class="d-line-accent" d="M548 96 L694 96" marker-end="url(#arrA)"/>
+        <text class="d-label" x="621" y="86" text-anchor="middle">write + commit</text>
+        <path class="d-line" d="M694 134 L556 134" marker-end="url(#arr)"/>
+        <text class="d-label" x="621" y="154" text-anchor="middle">fsnotify, reindex</text>
+
+        <path class="d-flow" d="M198 96 H344 M548 96 H694"/>
+        <path class="d-flow d-flow-2" d="M694 134 H556 M344 134 H206"/>
+
+        <text class="d-sub" x="794" y="196" text-anchor="middle" opacity=".85">Obsidian, git pull and rsync</text>
+        <text class="d-sub" x="794" y="212" text-anchor="middle" opacity=".85">edit the same directory</text>
+      </svg>
+    </div>
+
+    <div class="grid grid-3" style="margin-top:34px">
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h4"/></svg></div>
+        <h3>Markdown you can leave at any time</h3>
+        <p>One file per note, YAML frontmatter, <code>[[wikilinks]]</code>, inline tags, checkboxes. Nothing is stored in a format only this server understands, so leaving costs a <code>docker rm</code> and nothing else.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>
+        <h3>Search that survives external edits</h3>
+        <p>SQLite FTS5 with BM25 ranking, reconciled against the filesystem at start and kept live by a debounced watcher. Editing the same vault in Obsidian, or pulling it from git, is normal operation rather than a hazard.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>Edits that cannot silently destroy a paragraph</h3>
+        <p>Whole-note replacement requires the hash you read. Section edits address a heading. String edits must match character for character and are refused when ambiguous. Every mutating tool takes <code>dry_run</code> and answers with a diff.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M12 9v6"/></svg></div>
+        <h3>Every change is a commit</h3>
+        <p>One git repository per vault, one commit per write, the message naming the tool and the path. <code>note_history</code>, <code>note_diff</code> and <code>note_restore</code> are the same history your own <code>git log</code> shows.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+        <h3>Vaults teach the agent their own conventions</h3>
+        <p>Each layout writes <code>.secondbrain/instructions.md</code>, and its contents are sent to the client in the MCP <code>initialize</code> response. Where notes go and how they are named travels with the vault instead of living in a system prompt somewhere else.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg></div>
+        <h3>Nothing is ever really deleted</h3>
+        <p>No tool calls <code>os.Remove</code>. Deletions and overwrites go to <code>.secondbrain/trash/</code> with a timestamp and stay there for the retention window, on top of the commit that can be reverted.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== example ===================== -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">In practice</p>
+    <h2>A volume to mount, a search before every write</h2>
+    <p class="lede" style="margin-bottom:34px">Configuration is environment variables for a single user and an optional YAML file when there are several. The interesting half is on the right: the agent is expected to find the note that already exists and add to it, not to create a fourth note about the same subject.</p>
+
+    <div class="grid grid-2">
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">docker-compose.yml</span></div>
+<pre data-lang="yaml">services:
+  secondbrain:
+    image: ghcr.io/andreaskasper/secondbrain:latest
+    ports: ["2020:2020"]
+    volumes:
+      - ./data:/data
+    environment:
+      SECONDBRAIN_PUBLIC_URL: https://brain.example.com
+      SECONDBRAIN_USERNAME: andreas
+      SECONDBRAIN_PASSWORD: "bcrypt:$2a$12$..."
+      SECONDBRAIN_GIT: "true"
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+# chown -R 65532:65532 ./data before the first start.</pre>
+      </div>
+
+      <div class="code">
+        <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">what the model sends and gets</span></div>
+<pre data-lang="json">-&gt; note_search
+{ "query": "postgres connection pool" }
+
+&lt;- 2 hits
+[ { "path": "wiki/postgres.md",
+    "score": 8.4,
+    "snippet": "...pool size is per process..." } ]
+
+-&gt; note_section_edit
+{
+  "path": "wiki/postgres.md",
+  "mode": "append_to_section",
+  "heading": "Connection pooling",
+  "content": "PgBouncer in transaction mode...",
+  "dry_run": true
+}
+
+&lt;- diff only, nothing written yet</pre>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>The vault is the unit, not the note.</strong> One directory per vault, one git repository per vault, one search index per vault, and a user in <code>config.yaml</code> can be restricted to a subset of them. A work vault and a private vault on the same server never see each other.
+    </div>
+  </div>
+</section>
+
+<!-- ===================== quick start ===================== -->
+<section style="background:var(--bg-elev);border-block:1px solid var(--border)">
+  <div class="wrap narrow">
+    <p class="eyebrow">Quick start</p>
+    <h2>Running in three steps</h2>
+
+    <div class="steps" style="margin-top:30px">
+      <div class="step">
+        <div>
+          <h3>Prepare the volume</h3>
+          <p>The image runs as the distroless nonroot user, UID 65532. A bind mount owned by root is the single most common way a first deployment fails.</p>
+          <div class="code">
+            <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">mkdir -p ./data
+sudo chown -R 65532:65532 ./data
+docker run --rm -it ghcr.io/andreaskasper/secondbrain hashpw</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div>
+          <h3>Start the container</h3>
+          <p>Port 2020, one volume. Unlike its sibling aegis this container cannot run read-only: it writes notes, an index and a git repository.</p>
+          <div class="code">
+            <div class="code-head"><span class="dots"><i></i><i></i><i></i></span><span class="name">shell</span></div>
+<pre data-lang="shell">docker run -d --name secondbrain -p 2020:2020 \
+  -v "$PWD/data:/data" \
+  -e SECONDBRAIN_PUBLIC_URL=https://brain.example.com \
+  -e SECONDBRAIN_USERNAME=andreas \
+  -e SECONDBRAIN_PASSWORD='bcrypt:$2a$12$...' \
+  --user 65532:65532 --cap-drop ALL \
+  ghcr.io/andreaskasper/secondbrain:latest</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div>
+          <h3>Point a client at it</h3>
+          <p>Add <code>https://brain.example.com/mcp</code> as an MCP server. The client discovers the OAuth endpoints, registers itself and opens the login page. After signing in, ask the agent to call <code>vault_create</code> once and the layout it writes will explain itself on every later connection.</p>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-top:26px">The server is observable when you ask it to be: an optional Prometheus endpoint, off by default, reports vault and tool counters and never a line of note content &mdash; see <a href="docs.html#metrics">Metrics</a>.</p>
+
+    <div class="note warn">
+      <strong>Put it behind TLS.</strong> secondbrain speaks plain HTTP and does not terminate TLS &mdash; that belongs in front of the container, and these are your private notes travelling over the wire. The <a href="deploy.html">deployment guide</a> has working Compose setups for Traefik with Let's Encrypt, for a Cloudflare Tunnel, and for Cloudflare's proxy in front of Traefik.
+    </div>
+
+    <div class="cta-row" style="justify-content:flex-start;margin-top:34px">
+      <a class="btn btn-primary" href="docs.html">Read the docs</a>
+      <a class="btn btn-ghost" href="deploy.html">Deployment guide</a>
+      <a class="btn btn-ghost" href="security.html">Threat model</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div>&copy; <span data-year>2026</span> <a href="https://github.com/andreaskasper">Andreas Kasper</a> &middot; MIT licensed</div>
+    <nav class="foot-links">
+      <a href="docs.html">Docs</a>
+      <a href="deploy.html">Deployment</a>
+      <a href="security.html">Security</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="https://github.com/andreaskasper/secondbrain">GitHub</a>
+      <a href="https://github.com/andreaskasper/secondbrain/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="site.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Never commit a real configuration: it defines users and may hold passwords.
+config.yaml
+*.local.yaml
+.env
+
+# The Prometheus scrape credential, if you run deploy/prometheus.
+deploy/prometheus/secondbrain.key
+
+# Build output
+/secondbrain
+/src/secondbrain
+*.exe
+dist/
+
+# Go
+*.test
+*.out
+coverage.txt
+coverage.out
+
+# A local data directory holds actual notes, an index and a git repo per
+# vault. None of that belongs in this repository.
+/data/
+deploy/*/data/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

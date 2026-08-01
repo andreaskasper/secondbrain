@@ -16,9 +16,21 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  GO_VERSION: "1.25"
+
+  # Two registries, one image. ghcr.io and Docker Hub are peers here rather
+  # than primary and mirror: a single buildx run pushes the *same digest* to
+  # both, so there is no second build to pay for and no way for the two to
+  # drift apart.
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  GO_VERSION: "1.25"
+
+  # Deliberately a literal and not a secret. A secret used inside
+  # metadata-action's "images" input gets masked in that action's own
+  # outputs, and the tag list it hands to build-push-action turns into a row
+  # of asterisks. A namespace is not a secret anyway.
+  DOCKERHUB_IMAGE: docker.io/andreaskasper/secondbrain
+  DOCKERHUB_REPO: andreaskasper/secondbrain
 
 jobs:
   # Never publish an image whose tests did not pass. The full CI suite runs
@@ -74,11 +86,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # No "registry:" - login-action defaults to Docker Hub.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Two images in, one tag list out: every tag below is emitted once
+          # per registry, and build-push-action pushes them all from a single
+          # build.
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.DOCKERHUB_IMAGE }}
           # We set :latest ourselves below; without this the action adds its
           # own and the build command carries the tag twice.
           flavor: latest=false
@@ -114,12 +138,37 @@ jobs:
 
       # A signed statement of where the image came from, for a container that
       # will be handed somebody's entire knowledge base.
-      - name: Attest provenance
+      #
+      # One step per registry: the action writes its Sigstore bundle through
+      # the OCI referrers API, and that call is addressed to a single image
+      # name. Same digest both times - it is one artifact in two places.
+      - name: Attest provenance (ghcr.io)
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+      - name: Attest provenance (Docker Hub)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.DOCKERHUB_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # Docker Hub shows whatever was last uploaded, forever. Syncing it from
+      # a file in the repository is the only way it stays true - and that file
+      # is written for a Hub visitor rather than copied from the GitHub
+      # README, which is both too long for Docker Hub's 25,000 character
+      # ceiling and full of links that only resolve on GitHub.
+      - name: Sync Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_REPO }}
+          short-description: "An MCP server that gives an agent structured access to a knowledge base of plain Markdown notes"
+          readme-filepath: ./.docker/README.md
 
       - name: Summary
         run: |
@@ -215,8 +264,11 @@ jobs:
           cat > "$RUNNER_TEMP/notes.md" <<EOF
           ## Container image
 
+          Published to both registries from the same build, same digest:
+
           \`\`\`
           docker pull ghcr.io/andreaskasper/secondbrain:${VERSION}
+          docker pull andreaskasper/secondbrain:${VERSION}
           \`\`\`
 
           linux/amd64 and linux/arm64. Digest \`${DIGEST}\`.

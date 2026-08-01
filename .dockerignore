@@ -1,0 +1,38 @@
+# The Dockerfile copies src/ and nothing else. Everything listed here would
+# otherwise be uploaded into the build context on every build for no reason -
+# and in the case of a local .env or config.yaml, for a bad reason.
+
+.git
+.gitattributes
+.gitignore
+.github
+
+# Documentation, deployment examples, end-to-end tests, agent skills. None of
+# it is compiled into the binary.
+docs
+deploy
+test
+skills
+*.md
+LICENSE
+
+# Real configuration and real credentials must never come near the build
+# context. The examples are not needed either - the image ships no config, it
+# is configured from the environment.
+.env
+.env.*
+config.yaml
+config.*.yaml
+
+# Describes how to run the image, not how to build it.
+docker-compose.yml
+docker-compose.*.yml
+
+# A vault that happens to be lying around in the checkout
+data
+
+# Build and test leftovers
+src/coverage.out
+**/*.test
+**/*.out
+**/*.db

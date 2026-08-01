@@ -16,6 +16,11 @@ concurrency:
 env:
   # Tracks src/go.mod. The Dockerfile pins the same minor version.
   GO_VERSION: "1.25"
+  # Pinned deliberately: with @latest a release of either tool can turn CI red
+  # without a line of our code having changed, and two runs of the same commit
+  # are not guaranteed to agree. Bumping them should be a decision.
+  STATICCHECK_VERSION: "v0.7.0"
+  GOVULNCHECK_VERSION: "v1.6.0"
 
 jobs:
   # ---------------------------------------------------------------------
@@ -65,7 +70,7 @@ jobs:
 
       - name: Staticcheck
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
           staticcheck ./...
 
       - name: Test with race detector
@@ -168,11 +173,11 @@ jobs:
       - name: govulncheck
         working-directory: src
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
           govulncheck ./...
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -239,8 +244,8 @@ jobs:
           # The embedded icon must be served: MCP clients use it for the
           # connector, and a missing one is a silent regression.
           type="$(curl -fsS -o /dev/null -w '%{content_type}' http://localhost:2020/favicon.ico)"
-          if [ "$type" != "image/png" ]; then
-            echo "::error::/favicon.ico returned $type, expected image/png"
+          if [ "$type" != "image/svg+xml" ]; then
+            echo "::error::/favicon.ico returned $type, expected image/svg+xml"
             exit 1
           fi
 

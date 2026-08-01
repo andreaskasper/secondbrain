@@ -161,17 +161,17 @@ func (g *GitStore) History(rel string, limit int) ([]Revision, error) {
 			Message: strings.SplitN(c.Message, "\n", 2)[0],
 		})
 		if len(out) >= limit {
-			return storerStop
+			return errStorerStop
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, storerStop) {
+	if err != nil && !errors.Is(err, errStorerStop) {
 		return nil, err
 	}
 	return out, nil
 }
 
-var storerStop = errors.New("stop")
+var errStorerStop = errors.New("stop")
 
 // Contents returns a path as of a commit, which is what both note_diff and
 // note_restore are built on.

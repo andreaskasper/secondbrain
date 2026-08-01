@@ -1,7 +1,7 @@
 # ---- build ----------------------------------------------------------------
 # The Go version tracks src/go.mod (go 1.25.0). Bumping one without the other
 # is how a build starts failing for a reason nobody can see in the diff.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 
 ARG VERSION=dev
 ARG COMMIT=none

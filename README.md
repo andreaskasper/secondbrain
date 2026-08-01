@@ -11,6 +11,7 @@ readable without this program.
 ![Commit Activity](https://img.shields.io/github/commit-activity/m/andreaskasper/secondbrain.svg)
 [![Issues](https://img.shields.io/github/issues/andreaskasper/secondbrain.svg)](https://github.com/andreaskasper/secondbrain/issues)
 ![Repo Size](https://img.shields.io/github/repo-size/andreaskasper/secondbrain.svg)
+[![Docker Pulls](https://img.shields.io/docker/pulls/andreaskasper/secondbrain.svg)](https://hub.docker.com/r/andreaskasper/secondbrain)
 ![Stars](https://img.shields.io/github/stars/andreaskasper/secondbrain.svg?style=social)
 
 ---
@@ -66,6 +67,38 @@ None of these make an agent careful. They make carelessness recoverable.
 - **Search:** SQLite FTS5 with BM25 ranking, pure Go, one index per vault
 - **State:** notes and git on disk under `/data`; tokens and sessions in
   memory only
+
+## Where to get it
+
+The image is published to two registries from the same build, with the same
+digest and the same tags. Neither is a mirror of the other; pick whichever you
+already trust.
+
+| Registry                  | Image                               |
+| ------------------------- | ----------------------------------- |
+| GitHub Container Registry | `ghcr.io/andreaskasper/secondbrain` |
+| Docker Hub                | `andreaskasper/secondbrain`         |
+
+`linux/amd64` and `linux/arm64` — arm64 is a first-class target, since a good
+deal of this runs on small home servers rather than cloud VMs. Every release
+carries an SBOM and a signed
+[build provenance attestation](https://github.com/andreaskasper/secondbrain/attestations).
+
+| Tag           | Points at                       |
+| ------------- | ------------------------------- |
+| `latest`      | the most recent release         |
+| `1.0.260731`  | that exact release              |
+| `1.0`, `1`    | the newest release of that line |
+| `sha-1a2b3c4` | one exact commit                |
+
+Static binaries for Linux and macOS, for anyone who would rather not run a
+container at all, are attached to every
+[release](https://github.com/andreaskasper/secondbrain/releases).
+
+The examples below use the ghcr.io address throughout — a compose file can only
+pull one, and printing both would make them ambiguous rather than helpful.
+Substitute `andreaskasper/secondbrain` anywhere you see it if you prefer Docker
+Hub.
 
 ## Quick start
 
@@ -453,11 +486,13 @@ python3 test/e2e.py
 ```
 .
 ├── Dockerfile
+├── .dockerignore
 ├── docker-compose.yml
 ├── docker-compose.build.yml
 ├── config.example.yaml
 ├── .env.example
 ├── README.md
+├── .docker/README.md         # the Docker Hub overview
 ├── projektbeschreibung.md    # what and why (German)
 ├── spezifikation.md          # the full specification (German)
 ├── deploy/                   # Traefik and Cloudflare Tunnel examples

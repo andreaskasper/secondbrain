@@ -177,7 +177,12 @@ jobs:
           govulncheck ./...
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.28.0
+        # v0.36.0, not v0.28.0: the older release calls
+        # aquasecurity/setup-trivy@v0.2.1 by tag, and that tag no longer
+        # exists upstream, so the job dies in "Set up job" before it runs.
+        # v0.36.0 pins its setup-trivy by commit hash, which cannot rot the
+        # same way.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .

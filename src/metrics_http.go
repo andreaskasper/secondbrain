@@ -80,7 +80,7 @@ func (s *Server) metricsSnapshot(cfg *Config) snapshot {
 	snap := snapshot{
 		Version: version, Commit: commit,
 		Users: len(cfg.Users), Tokens: tokens, Refresh: refresh,
-		Clients: clients, Sessions: s.mcp.count(),
+		Clients: clients,
 	}
 	for _, v := range s.vaults.List(nil) {
 		st, err := v.idx.Stats()

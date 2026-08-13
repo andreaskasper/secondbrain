@@ -134,14 +134,13 @@ func (m *Metrics) TrashPurged(n int) {
 // snapshot is the part of the picture the registry cannot know: it has to be
 // gathered from the session store and the vaults at scrape time.
 type snapshot struct {
-	Version  string
-	Commit   string
-	Users    int
-	Tokens   int
-	Refresh  int
-	Clients  int
-	Sessions int
-	Vaults   []vaultSnapshot
+	Version string
+	Commit  string
+	Users   int
+	Tokens  int
+	Refresh int
+	Clients int
+	Vaults  []vaultSnapshot
 }
 
 type vaultSnapshot struct {
@@ -178,8 +177,9 @@ func (m *Metrics) Render(s snapshot) string {
 		fmt.Sprintf("secondbrain_access_tokens %d", s.Tokens))
 	write("secondbrain_refresh_tokens", "Live refresh tokens.", "gauge",
 		fmt.Sprintf("secondbrain_refresh_tokens %d", s.Refresh))
-	write("secondbrain_mcp_sessions", "Open MCP sessions.", "gauge",
-		fmt.Sprintf("secondbrain_mcp_sessions %d", s.Sessions))
+	// secondbrain_mcp_sessions was removed along with the sessions
+	// themselves. A gauge that can only ever read zero is worse than no
+	// gauge: it invites somebody to alert on it.
 
 	var notes, words, bytes, tags, links, broken, orphans, tasks, atts []string
 	for _, v := range s.Vaults {

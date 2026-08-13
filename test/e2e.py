@@ -148,7 +148,28 @@ ok(e is not None, "path traversal refused")
 d,e = call("note_read", {"path":".secondbrain/index.db"})
 ok(e is not None, "internal directory unreachable")
 
+# The transport is stateless: initialize must not hand out a session id at
+# all. It once did, bound to the hash of the access token - so the ordinary
+# event of a token refresh left every conversation dead with "unknown or
+# mismatched session" until the client was reconnected by hand.
+ok(not SID, "initialize hands out no Mcp-Session-Id")
+
+# And a session id the server never issued has to be ignored rather than
+# refused, so that a client still holding one from before heals by itself.
+s,h,b = req("/mcp", data={"jsonrpc":"2.0","id":99,"method":"ping"},
+            headers=dict(list(AUTH.items())+[("Mcp-Session-Id","d3adb33fd3adb33f")]))
+ok(s==200 and "error" not in json.loads(b), "a stale Mcp-Session-Id is ignored, not refused")
+
+s,h,b = req("/mcp", method="GET", headers=dict(AUTH))
+ok(s==405 and "POST" in h.get("allow",""), "GET /mcp is refused: there is no notification stream")
+
+s,h,b = req("/healthz")
+hz=json.loads(b)
+for key in ("started","uptime_seconds","protocol_version","token_ttl","stateless"):
+    ok(key in hz, f"/healthz reports {key}")
+ok(hz["stateless"] is True, "/healthz says the transport is stateless")
+
 s,h,b = req("/mcp", method="DELETE", headers=dict(list(AUTH.items())+list(SID.items())))
-ok(s==204, "session delete")
+ok(s==204, "session delete is accepted even though there is no session")
 
 print("\nALL E2E CHECKS PASSED")

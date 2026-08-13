@@ -65,8 +65,9 @@ None of these make an agent careful. They make carelessness recoverable.
 - **Auth:** OAuth 2.1 with Dynamic Client Registration and PKCE; secondbrain
   is its own authorization server with a login screen
 - **Search:** SQLite FTS5 with BM25 ranking, pure Go, one index per vault
-- **State:** notes and git on disk under `/data`; tokens and sessions in
-  memory only
+- **State:** notes and git on disk under `/data`; tokens in memory only. The
+  MCP transport itself is stateless: no `Mcp-Session-Id` is issued, so a token
+  refresh cannot strand a running conversation
 
 ## Where to get it
 
@@ -446,8 +447,8 @@ mounted at startup, turning metrics on is a restart, not a reload.
 
 The exposition is written by hand — there is no Prometheus client library in
 the dependency list — and no metric carries a note path, a title, a tag or any
-content. What there is: build info and uptime; users, OAuth clients, tokens
-and MCP sessions; per vault the notes, words, bytes, tags, links, broken
+content. What there is: build info and uptime; users, OAuth clients and tokens;
+per vault the notes, words, bytes, tags, links, broken
 links, orphans, open tasks and attachments; and counters for tool calls,
 duration and result bytes, HTTP requests, logins, writes, dry runs, truncated
 results, index work, watcher events, git commits and failures, and trashed
@@ -505,7 +506,7 @@ python3 test/e2e.py
     ├── oauth.go              # discovery, DCR, /token, PKCE
     ├── login.go              # login page, password verification
     ├── session.go            # in-memory clients, codes, tokens
-    ├── mcp.go                # Streamable HTTP, JSON-RPC, sessions
+    ├── mcp.go                # Streamable HTTP, JSON-RPC, stateless transport
     ├── tools.go              # registry, schemas, dispatch, arguments
     ├── tools_read.go         # discovery and reading
     ├── tools_write.go        # creating and editing

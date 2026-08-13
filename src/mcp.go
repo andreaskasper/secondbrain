@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 )
 
 const (
@@ -56,66 +54,30 @@ func rpcFail(id json.RawMessage, code int, msg string) *rpcResponse {
 }
 
 // ---------------------------------------------------------------------------
-// MCP sessions
+// Sessions, and why there are none
+//
+// An earlier version issued an Mcp-Session-Id at initialize and bound it to
+// the hash of the access token that asked for it. That binding was the bug.
+// Access tokens expire after token_ttl and the client quietly exchanges its
+// refresh token for a new one; the new token hashes differently, so every
+// session ever issued became permanently unusable with "unknown or mismatched
+// session". Any conversation outliving token_ttl - twelve hours by default -
+// died mid-sentence, and retrying could not bring it back.
+//
+// The session bought nothing in exchange for that. It held no state: every
+// tool call names its own vault and path, and authorisation lives entirely in
+// the bearer token, which is verified on every single request anyway. So the
+// repair is not a better binding but no session at all. The spec permits a
+// server to omit the session id at initialize, and a failure mode that cannot
+// occur needs no recovery path.
+//
+// A client still sending a stale Mcp-Session-Id from before this change is
+// answered normally rather than with 404. Returning 404 is the correct move
+// for a server that does use sessions, but it only helps clients that
+// implement the re-initialise path - and the client that uncovered this bug
+// does not. Ignoring the header heals every one of them, without asking
+// anybody to reconnect.
 // ---------------------------------------------------------------------------
-
-// mcpSessions binds an Mcp-Session-Id to the access token that created it, so
-// that a session cannot be used - or ended - by anyone else.
-type mcpSessions struct {
-	mu   sync.Mutex
-	byID map[string]string
-	seen map[string]time.Time
-}
-
-func newMCPSessions() *mcpSessions {
-	return &mcpSessions{byID: map[string]string{}, seen: map[string]time.Time{}}
-}
-
-func (m *mcpSessions) create(tokenHash string) string {
-	id := randToken(16)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.byID[id] = tokenHash
-	m.seen[id] = time.Now()
-	return id
-}
-
-func (m *mcpSessions) valid(id, tokenHash string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	h, ok := m.byID[id]
-	if !ok {
-		return false
-	}
-	m.seen[id] = time.Now()
-	return h == tokenHash
-}
-
-// drop ends a session, but only for the token that owns it. Without the
-// ownership check any authenticated caller could end a session belonging to
-// somebody else simply by naming it.
-func (m *mcpSessions) drop(id, tokenHash string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if h, ok := m.byID[id]; !ok || h != tokenHash {
-		return false
-	}
-	delete(m.byID, id)
-	delete(m.seen, id)
-	return true
-}
-
-func (m *mcpSessions) sweep() {
-	cutoff := time.Now().Add(-24 * time.Hour)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id, t := range m.seen {
-		if t.Before(cutoff) {
-			delete(m.byID, id)
-			delete(m.seen, id)
-		}
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Transport
@@ -130,58 +92,61 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, tokenHash, ok := s.authenticate(w, r, cfg)
+	user, ok := s.authenticate(w, r, cfg)
 	if !ok {
 		return
 	}
 
-	switch r.Method {
-	case http.MethodDelete:
-		if id := r.Header.Get("Mcp-Session-Id"); id != "" {
-			s.mcp.drop(id, tokenHash)
-		}
-		w.WriteHeader(http.StatusNoContent)
-		return
-	case http.MethodGet:
-		s.streamNotifications(w, r)
-		return
-	case http.MethodPost:
-	default:
-		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
+	// The limiter runs before the method switch rather than after it. It used
+	// to sit below, which left GET and DELETE outside it entirely - and GET
+	// held a goroutine and a ticker for as long as the caller cared to keep
+	// the connection open.
 	if allowed, _ := s.toolLimiter.Allow(user.Name); !allowed {
 		writeHTTPError(w, http.StatusTooManyRequests, "too many requests")
 		return
 	}
 
+	switch r.Method {
+	case http.MethodDelete:
+		// There is no session to end, but a client that politely closes one
+		// should get the answer it expects rather than an error.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case http.MethodGet:
+		// A server with nothing to push may refuse the stream, and this one
+		// has nothing to push: it advertises listChanged:false and never sent
+		// a notification, so the stream only ever carried keep-alives.
+		w.Header().Set("Allow", "POST, DELETE")
+		writeHTTPError(w, http.StatusMethodNotAllowed, "this server does not offer a notification stream")
+		return
+	case http.MethodPost:
+	default:
+		w.Header().Set("Allow", "POST, DELETE")
+		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
 	body, err := readLimited(r, 8<<20)
 	if err != nil {
-		writeRPC(w, "", rpcFail(nil, codeParseError, "request body too large or unreadable"))
+		writeRPC(w, rpcFail(nil, codeParseError, "request body too large or unreadable"))
 		return
 	}
 
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
-		writeRPC(w, "", rpcFail(nil, codeInvalidRequest, "empty request"))
+		writeRPC(w, rpcFail(nil, codeInvalidRequest, "empty request"))
 		return
 	}
 
 	if trimmed[0] == '[' {
 		var batch []rpcRequest
 		if err := json.Unmarshal(body, &batch); err != nil {
-			writeRPC(w, "", rpcFail(nil, codeParseError, "malformed JSON-RPC batch"))
+			writeRPC(w, rpcFail(nil, codeParseError, "malformed JSON-RPC batch"))
 			return
 		}
 		var out []*rpcResponse
-		sessionID := ""
 		for _, req := range batch {
-			resp, sid := s.dispatch(r, req, user, tokenHash, cfg)
-			if sid != "" && sessionID == "" {
-				sessionID = sid
-			}
-			if resp != nil {
+			if resp := s.dispatch(req, user, cfg); resp != nil {
 				out = append(out, resp)
 			}
 		}
@@ -189,21 +154,21 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		writeRPCRaw(w, sessionID, out)
+		writeRPCRaw(w, out)
 		return
 	}
 
 	var req rpcRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeRPC(w, "", rpcFail(nil, codeParseError, "malformed JSON-RPC request"))
+		writeRPC(w, rpcFail(nil, codeParseError, "malformed JSON-RPC request"))
 		return
 	}
-	resp, sessionID := s.dispatch(r, req, user, tokenHash, cfg)
+	resp := s.dispatch(req, user, cfg)
 	if resp == nil {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	writeRPC(w, sessionID, resp)
+	writeRPC(w, resp)
 }
 
 // originAllowed implements the DNS-rebinding guard, opt-in for the same reason
@@ -224,25 +189,25 @@ func (s *Server) originAllowed(cfg *Config, origin string) bool {
 	return false
 }
 
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, cfg *Config) (*User, string, bool) {
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, cfg *Config) (*User, bool) {
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(auth) <= len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
 		s.challenge(w, cfg)
-		return nil, "", false
+		return nil, false
 	}
 	raw := strings.TrimSpace(auth[len(prefix):])
 	tok := s.sessions.LookupAccess(raw)
 	if tok == nil {
 		s.challenge(w, cfg)
-		return nil, "", false
+		return nil, false
 	}
 	user, ok := cfg.Users[tok.User]
 	if !ok {
 		s.challenge(w, cfg)
-		return nil, "", false
+		return nil, false
 	}
-	return user, hashToken(raw), true
+	return user, true
 }
 
 func (s *Server) challenge(w http.ResponseWriter, cfg *Config) {
@@ -251,56 +216,17 @@ func (s *Server) challenge(w http.ResponseWriter, cfg *Config) {
 	writeHTTPError(w, http.StatusUnauthorized, "authentication required")
 }
 
-func (s *Server) streamNotifications(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeHTTPError(w, http.StatusNotImplemented, "streaming unsupported")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-s.stop:
-			return
-		case <-ticker.C:
-			fmt.Fprint(w, ": keep-alive\n\n")
-			flusher.Flush()
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
-func (s *Server) dispatch(r *http.Request, req rpcRequest, user *User, tokenHash string, cfg *Config) (*rpcResponse, string) {
+func (s *Server) dispatch(req rpcRequest, user *User, cfg *Config) *rpcResponse {
 	isNotification := len(req.ID) == 0
-
-	sid := r.Header.Get("Mcp-Session-Id")
-	if sid != "" && req.Method != "initialize" {
-		if !s.mcp.valid(sid, tokenHash) {
-			return rpcFail(req.ID, codeInvalidRequest, "unknown or mismatched session"), ""
-		}
-	}
 
 	switch req.Method {
 	case "initialize":
-		// Reuse a session the caller already holds instead of minting a new
-		// one on every reconnect; otherwise a flaky client leaves a trail of
-		// live sessions behind it.
-		newSID := sid
-		if newSID == "" || !s.mcp.valid(newSID, tokenHash) {
-			newSID = s.mcp.create(tokenHash)
-		}
+		// No Mcp-Session-Id is minted and none is echoed back. See the note
+		// at the top of this file for why.
 		return rpcOK(req.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
 			"serverInfo":      map[string]any{"name": serverName, "version": version},
@@ -311,28 +237,28 @@ func (s *Server) dispatch(r *http.Request, req rpcRequest, user *User, tokenHash
 				"tools": map[string]any{"listChanged": false},
 			},
 			"instructions": s.instructions(user),
-		}), newSID
+		})
 
 	case "notifications/initialized", "notifications/cancelled":
-		return nil, ""
+		return nil
 
 	case "ping":
 		if isNotification {
-			return nil, ""
+			return nil
 		}
-		return rpcOK(req.ID, map[string]any{}), ""
+		return rpcOK(req.ID, map[string]any{})
 
 	case "tools/list":
-		return rpcOK(req.ID, map[string]any{"tools": toolDefinitions(user)}), ""
+		return rpcOK(req.ID, map[string]any{"tools": toolDefinitions(user)})
 
 	case "tools/call":
-		return s.callTool(req, user, cfg), ""
+		return s.callTool(req, user, cfg)
 
 	default:
 		if isNotification {
-			return nil, ""
+			return nil
 		}
-		return rpcFail(req.ID, codeMethodNotFound, "unknown method: "+req.Method), ""
+		return rpcFail(req.ID, codeMethodNotFound, "unknown method: "+req.Method)
 	}
 }
 
@@ -385,14 +311,11 @@ Vault selection: every tool takes an optional "vault". Omitting it uses `)
 // Writing
 // ---------------------------------------------------------------------------
 
-func writeRPC(w http.ResponseWriter, sessionID string, resp *rpcResponse) {
-	writeRPCRaw(w, sessionID, resp)
+func writeRPC(w http.ResponseWriter, resp *rpcResponse) {
+	writeRPCRaw(w, resp)
 }
 
-func writeRPCRaw(w http.ResponseWriter, sessionID string, v any) {
-	if sessionID != "" {
-		w.Header().Set("Mcp-Session-Id", sessionID)
-	}
+func writeRPCRaw(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(v)
@@ -408,10 +331,4 @@ func readLimited(r *http.Request, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("body too large")
 	}
 	return b, nil
-}
-
-func (m *mcpSessions) count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.byID)
 }

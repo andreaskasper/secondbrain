@@ -43,7 +43,7 @@ Dokument.
 | **Note** | Eine Datei mit der Endung `.md` innerhalb eines Vaults, mit optionalem YAML-Frontmatter. |
 | **Attachment** | Jede indizierte Datei im Vault, die keine `.md`-Datei ist. |
 | **Client** | Ein per OAuth-DCR registrierter MCP-Client. |
-| **Session** | Ein ausgegebener Access Token, gebunden an genau einen User; dazu optional eine `Mcp-Session-Id`. |
+| **Session** | Ein ausgegebener Access Token, gebunden an genau einen User. Eine `Mcp-Session-Id` gibt es nicht (§7.1). |
 | **Tool** | Eine der 34 über MCP angebotenen Operationen. |
 
 Die Schlüsselwörter **MUSS**, **SOLLTE** und **KANN** sind im Sinne von
@@ -65,8 +65,11 @@ RFC 2119 zu lesen.
 - **Signale:** `SIGHUP` lädt die Konfiguration neu, sofern sie aus einer Datei
   stammt. `SIGINT`/`SIGTERM` fahren geordnet herunter, mit 10 s Abflussfrist.
 - **HTTP-Server:** `ReadHeaderTimeout` 10 s, `IdleTimeout` 120 s.
-- **Health:** `GET /healthz` liefert unauthentifiziert
-  `{"status":"ok","version":…,"vaults":<Anzahl>}`.
+- **Health:** `GET /healthz` liefert unauthentifiziert `status`, `version`,
+  `commit`, `vaults`, `started`, `uptime_seconds`, `protocol_version`,
+  `token_ttl` und `stateless`. Das sind genau die Angaben, mit denen sich ein
+  Client erklären lässt, der plötzlich nicht mehr arbeitet — ohne Zugriff auf
+  den Host. Kein Feld benennt einen User, einen Vault oder eine Notiz.
 
 ### 2.1 Nebenläufigkeit
 
@@ -77,7 +80,6 @@ RFC 2119 zu lesen.
 | Index | ein `sync.Mutex` pro `Index`, dazu `SetMaxOpenConns(1)` auf der SQLite-Verbindung |
 | Git-Repository | `GitStore.mu`, ein Mutex pro Vault |
 | Sitzungszustand | ein `sync.Mutex` über allen Tabellen |
-| MCP-Sitzungen | eigener `sync.Mutex` |
 | Aktive Konfiguration | `atomic.Pointer[Config]`; ein Reload tauscht den Zeiger |
 
 Der Schreib-Mutex gilt pro Vault, nicht pro Datei. Der Preis ist, dass zwei
@@ -89,7 +91,7 @@ zwei Tool-Aufrufe niemals innerhalb einer Datei verschränkt werden können.
 | Goroutine | Intervall | Aufgabe |
 | --- | --- | --- |
 | Session-Janitor | 60 s | Entfernt abgelaufene Codes, Tokens, CSRF-Einträge und alte Familieneinträge |
-| Housekeeping | 1 h | Räumt MCP-Sitzungen, die 24 h ungenutzt sind, und entleert den Papierkorb nach `trash_retention` |
+| Housekeeping | 1 h | Entleert den Papierkorb nach `trash_retention` |
 | Config-Watcher | 2 s | Nur wenn die Konfiguration aus einer Datei stammt; prüft mtime, Größe und Inode |
 | fsnotify-Watcher | ereignisgesteuert | Einer pro Vault, entprellt mit 400 ms |
 
@@ -447,7 +449,6 @@ Neustart verloren.
 | `csrf` | SHA-256 des Tokens | Client, Redirect-URI, State, Challenge | 10 Minuten |
 | `consumedRefresh` | SHA-256 des Tokens | Familie, Zeitpunkt | 30 Tage |
 | `deadFamilies` | Familien-ID | Zeitpunkt der Tötung | 30 Tage |
-| MCP-Sitzungen | `Mcp-Session-Id` | Hash des zugehörigen Access Tokens | 24 h ohne Nutzung |
 
 Alle geheimnistragenden Werte werden als SHA-256-Hash gespeichert; der
 Klartext existiert nur in der Antwort, die ihn ausgegeben hat. Die
@@ -466,34 +467,53 @@ wie ein unbekannter aus.
 - **`POST /mcp`** — eine einzelne JSON-RPC-Anfrage oder ein Array (Batch).
   Antwort immer `application/json` mit `Cache-Control: no-store`. Rumpf
   maximal 8 MiB.
-- **`GET /mcp`** — öffnet einen SSE-Strom. In v1 werden ausschließlich
-  Keep-alive-Kommentare alle 30 Sekunden gesendet.
-- **`DELETE /mcp`** — beendet die Sitzung aus `Mcp-Session-Id` und antwortet
-  `204`. Die Sitzung wird nur beendet, wenn der vorgelegte Token derjenige
-  ist, der sie erzeugt hat; ohne diese Prüfung könnte jeder authentifizierte
-  Aufrufer fremde Sitzungen beenden, indem er sie benennt.
+- **`GET /mcp`** — antwortet `405` mit `Allow: POST, DELETE`. Die Spezifikation
+  erlaubt einem Server, der nichts zu senden hat, den SSE-Strom abzulehnen,
+  und dieser hat nichts zu senden: er meldet `listChanged: false` und hat nie
+  eine Notification verschickt. Der Strom trug ausschließlich Keep-alives und
+  hielt dafür pro offener Verbindung eine Goroutine und einen Ticker.
+- **`DELETE /mcp`** — antwortet `204`. Es gibt keine Sitzung zu beenden; ein
+  Client, der höflich aufräumt, bekommt trotzdem die Antwort, die er erwartet.
+- **Ratenbegrenzung** greift für *alle* Methoden auf `/mcp`, nicht erst nach
+  der Methodenweiche. Zuvor lagen `GET` und `DELETE` außerhalb.
 - **`Origin`** — wird nur geprüft, wenn `allowed_origins` nichtleer ist. Dann
   sind der eigene Issuer, jeder aufgeführte Eintrag und `*` erlaubt, alles
   andere ergibt `403`. Leer bedeutet keine Prüfung: `/mcp` ist Bearer-
   geschützt und auf einem öffentlichen Host erreichbar, und eine harte
   Origin-Prüfung bricht gehostete Clients, ohne etwas zu gewinnen.
 
-### 7.1 Sitzungen
+### 7.1 Sitzungen — es gibt keine
 
-`Mcp-Session-Id` wird bei `initialize` ausgegeben und ist an den Hash des
-Access Tokens gebunden. Sendet ein Client bei einer anderen Methode eine
-Sitzungs-ID, die unbekannt ist oder zu einem anderen Token gehört, antwortet
-der Server mit dem JSON-RPC-Fehler `-32600` („unknown or mismatched session").
+Der Server vergibt **keine `Mcp-Session-Id`**, weder bei `initialize` noch
+sonst. Ein `Mcp-Session-Id`-Header, den ein Client dennoch mitschickt, wird
+ignoriert; der Aufruf läuft normal durch.
 
-Bei `initialize` wird eine bereits gehaltene, gültige Sitzungs-ID
-wiederverwendet, statt bei jedem Reconnect eine neue auszugeben — sonst
-hinterlässt ein instabiler Client eine Spur lebender Sitzungen.
+Bis v0.1.0 war es anders: `initialize` gab eine Sitzungs-ID aus, die an den
+SHA-256 des Access Tokens gebunden war. Das war ein Fehler. Access Tokens
+laufen nach `token_ttl` ab, der Client tauscht sein Refresh Token still gegen
+ein neues — und das neue Token hasht anders. Damit wurde **jede** ausgegebene
+Sitzung dauerhaft unbrauchbar (`-32600`, „unknown or mismatched session"),
+sobald eine Unterhaltung `token_ttl` überlebte. Bei der Voreinstellung von
+zwölf Stunden traf das jede Sitzung, die über Nacht lief.
+
+Die Sitzung kaufte dafür nichts ein: sie trug keinerlei Zustand. Jeder
+Werkzeugaufruf benennt Vault und Pfad selbst, und die Autorisierung steckt
+vollständig im Bearer Token, das ohnehin bei jeder einzelnen Anfrage geprüft
+wird. Die Reparatur ist deshalb nicht eine bessere Bindung, sondern gar keine
+Sitzung — die Spezifikation erlaubt einem Server ausdrücklich, bei
+`initialize` keine Sitzungs-ID zu vergeben.
+
+Ein veralteter Header wird bewusst **nicht** mit `404` beantwortet. `404` wäre
+für einen Server mit Sitzungen richtig, hilft aber nur Clients, die den
+Neuinitialisierungs-Pfad implementieren — und der Client, an dem der Fehler
+auffiel, tut das nicht. Ignorieren heilt alle, ohne jemanden zum Neuverbinden
+zu zwingen.
 
 ### 7.2 Methoden
 
 | Methode | Verhalten |
 | --- | --- |
-| `initialize` | Liefert `protocolVersion`, `serverInfo` (`secondbrain`, Version), `capabilities: {tools:{listChanged:true}}` und `instructions` (§7.3) |
+| `initialize` | Liefert `protocolVersion`, `serverInfo` (`secondbrain`, Version), `capabilities: {tools:{listChanged:false}}` und `instructions` (§7.3). Kein `Mcp-Session-Id`-Header. |
 | `notifications/initialized` | Wird angenommen, keine Antwort |
 | `notifications/cancelled` | Wird angenommen, keine Antwort |
 | `ping` | Leeres Ergebnis; als Notification ohne Antwort |
@@ -523,14 +543,13 @@ Damit reisen die Konventionen einer Wissensbasis mit der Wissensbasis.
 Beginnt der Rumpf mit `[`, wird er als Array von Anfragen gelesen und in
 Reihenfolge abgearbeitet. Antworten werden gesammelt und als Array
 zurückgegeben. Enthält der Batch ausschließlich Notifications, ist die
-Antwort `202` ohne Rumpf. Erzeugt eine `initialize`-Anfrage im Batch eine
-Sitzungs-ID, wird die erste solche im `Mcp-Session-Id`-Header der
-Gesamtantwort ausgegeben.
+Antwort `202` ohne Rumpf. Ein `Mcp-Session-Id`-Header wird nie gesetzt, auch
+nicht, wenn der Batch ein `initialize` enthält.
 
 ### 7.5 Fehlerkonvention
 
 Ein **Protokollfehler** ist ein JSON-RPC-Fehlerobjekt: `-32700` bei
-unlesbarem JSON, `-32600` bei ungültiger Anfrage oder falscher Sitzung,
+unlesbarem JSON, `-32600` bei ungültiger Anfrage,
 `-32601` bei unbekannter Methode oder unbekanntem Tool, `-32602` bei
 unlesbaren `tools/call`-Parametern.
 
@@ -1935,7 +1954,7 @@ das der Normalfall, `rate()` erkennt den Rücksprung.
   (§10). Ein Scrape ist damit eine Handvoll zählender SQLite-Abfragen und kein
   Lauf über das Dateisystem. Ein Vault, dessen Statistik fehlschlägt, wird
   übersprungen, statt den ganzen Scrape scheitern zu lassen.
-- **Sitzungs- und Tokenzahlen** kommen aus dem Sitzungsspeicher (§6).
+- **Tokenzahlen** kommen aus dem Sitzungsspeicher (§6).
 - Eine Familie **ohne Reihen wird ganz weggelassen**, samt `# HELP` und
   `# TYPE`. Vor dem ersten Werkzeugaufruf gibt es also keine
   `secondbrain_tool_calls_total`, und ohne Vault keine `secondbrain_vault_*`.
@@ -1952,7 +1971,6 @@ Gauges:
 | `secondbrain_oauth_clients` | — | Seit dem Start registrierte OAuth-Clients. Nur im Speicher. |
 | `secondbrain_access_tokens` | — | Lebende Access Tokens. |
 | `secondbrain_refresh_tokens` | — | Lebende Refresh Tokens. |
-| `secondbrain_mcp_sessions` | — | Offene MCP-Sitzungen. |
 | `secondbrain_vault_notes` | `vault` | Markdown-Notizen im Vault. |
 | `secondbrain_vault_words` | `vault` | Wörter über alle Notizen. |
 | `secondbrain_vault_bytes` | `vault` | Bytes über alle Notizen. |
@@ -2136,7 +2154,7 @@ src/
 ├── oauth.go         Discovery, DCR, /token, PKCE, Fehlerhelfer
 ├── login.go         Anmeldeseite, Passwortprüfung, CSP
 ├── session.go       Clients, Codes, Tokens, CSRF, Janitor
-├── mcp.go           Streamable HTTP, JSON-RPC, MCP-Sitzungen, instructions
+├── mcp.go           Streamable HTTP, JSON-RPC, zustandsloser Transport, instructions
 ├── tools.go         Registry, Schemata, Dispatch, Argumentzugriff
 ├── tools_read.go    Discovery und Lesen (11 Werkzeuge)
 ├── tools_write.go   Anlegen, Ändern, Erfassen (10 Werkzeuge)

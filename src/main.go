@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	version = "0.1.0"
+	version = "0.1.1"
 	commit  = "dev"
 	built   = "unknown"
 )
@@ -34,8 +34,13 @@ type Server struct {
 	cfg      atomic.Pointer[Config]
 	vaults   *VaultManager
 	sessions *SessionStore
-	mcp      *mcpSessions
 	stop     chan struct{}
+
+	// startedAt answers "since when has this process been running", which is
+	// the first question anybody asks when a long-lived client suddenly
+	// stops working. It is served from /healthz so the answer does not
+	// require shell access to the host.
+	startedAt time.Time
 
 	metrics *Metrics
 
@@ -54,11 +59,11 @@ func NewServer(cfg *Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		vaults:   vm,
-		sessions: NewSessionStore(),
-		mcp:      newMCPSessions(),
-		metrics:  NewMetrics(),
-		stop:     make(chan struct{}),
+		vaults:    vm,
+		sessions:  NewSessionStore(),
+		metrics:   NewMetrics(),
+		stop:      make(chan struct{}),
+		startedAt: time.Now(),
 	}
 	s.setConfig(cfg)
 	s.loginLimiter = NewKeyedLimiter(cfg.LoginRateLimit)
@@ -75,10 +80,27 @@ func NewServer(cfg *Config) (*Server, error) {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
+	// /healthz reports the handful of facts needed to explain a client that
+	// has stopped working: how long this process has been up, which protocol
+	// it speaks, and how long an access token lives. A stale token was once
+	// diagnosed by reading container uptime over SSH; it should not have
+	// needed SSH. Nothing here names a user, a vault or a note.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		cfg := s.Config()
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "ok", "version": version, "vaults": len(s.vaults.List(nil)),
+			"status":           "ok",
+			"version":          version,
+			"commit":           commit,
+			"vaults":           len(s.vaults.List(nil)),
+			"started":          s.startedAt.UTC().Format(time.RFC3339),
+			"uptime_seconds":   int(time.Since(s.startedAt).Seconds()),
+			"protocol_version": mcpProtocolVersion,
+			"token_ttl":        cfg.TokenTTL.String(),
+			// Stated explicitly so nobody has to read the source to find out
+			// whether a returned Mcp-Session-Id means anything here.
+			"stateless": true,
 		})
 	})
 	mux.HandleFunc("/favicon.ico", serveFavicon)
@@ -228,6 +250,13 @@ Environment:
   SECONDBRAIN_GIT            commit every change (default true)
   SECONDBRAIN_GIT_REMOTE     push to this remote after each commit
   SECONDBRAIN_GIT_TOKEN      token used for that push
+  SECONDBRAIN_GIT_AUTHOR     name recorded on those commits
+  SECONDBRAIN_GIT_EMAIL      address recorded on those commits
+  SECONDBRAIN_TOKEN_TTL      how long an access token lives (default 12h)
+  SECONDBRAIN_CODE_TTL       how long an authorization code lives (default 60s)
+  SECONDBRAIN_TRASH_RETENTION how long deleted notes stay recoverable (default 720h)
+  SECONDBRAIN_ALLOWED_ORIGINS comma-separated Origin allow-list (default: any)
+  SECONDBRAIN_MAX_RESPONSE_BYTES cap on a single tool result (default 262144)
   SECONDBRAIN_METRICS        expose Prometheus metrics (default false)
   SECONDBRAIN_METRICS_PATH   where, on the listener (default /metrics)
   SECONDBRAIN_METRICS_KEY    shared key a scraper must present
@@ -289,6 +318,12 @@ func run() int {
 		"git":        cfg.Git,
 		"metrics":    cfg.Metrics,
 		"config":     cfg.Source,
+		// The settings below decide when a client is forced to re-authenticate.
+		// Logging them costs one line and turns "why did my session die
+		// overnight" into a question the log already answers.
+		"token_ttl":        cfg.TokenTTL.String(),
+		"code_ttl":         cfg.CodeTTL.String(),
+		"protocol_version": mcpProtocolVersion,
 	})
 
 	errCh := make(chan error, 1)
@@ -316,14 +351,14 @@ func run() int {
 	return 0
 }
 
-// housekeeping sweeps expired MCP sessions and old trash.
+// housekeeping clears out old trash. There are no MCP sessions to sweep:
+// the server does not keep any.
 func (s *Server) housekeeping() {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
 		select {
 		case <-t.C:
-			s.mcp.sweep()
 			retention := s.Config().TrashRetention
 			for _, v := range s.vaults.List(nil) {
 				if n := v.PurgeTrash(retention); n > 0 {
@@ -397,6 +432,7 @@ func cmdValidate(path string) int {
 	fmt.Printf("  listen:        %s\n", cfg.Listen)
 	fmt.Printf("  data_dir:      %s\n", cfg.DataDir)
 	fmt.Printf("  default_vault: %s\n", cfg.DefaultVault)
+	fmt.Printf("  token_ttl:     %s (a client must refresh at least this often)\n", cfg.TokenTTL)
 	fmt.Printf("  git:           %v\n", cfg.Git)
 	if cfg.Metrics {
 		where := "the main listener"

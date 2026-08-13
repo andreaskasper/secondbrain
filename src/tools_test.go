@@ -332,7 +332,7 @@ func TestMetricsRenderIsValidExposition(t *testing.T) {
 	m.GitCommit()
 
 	out := m.Render(snapshot{
-		Version: "0.1.0", Commit: "abc", Users: 1, Tokens: 2, Sessions: 1,
+		Version: "0.1.0", Commit: "abc", Users: 1, Tokens: 2, Refresh: 2,
 		Vaults: []vaultSnapshot{{Name: "default", Stats: &VaultStats{Notes: 12, Words: 900}}},
 	})
 

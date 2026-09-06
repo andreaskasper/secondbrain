@@ -187,10 +187,14 @@ jobs:
   # Static binaries for people who would rather not run a container. The
   # binary is self-contained - pure-Go SQLite, no libc, no shared objects -
   # so a single file per platform is the whole distribution.
+  #
+  # Skipped on a rebuild dispatch: the binaries of a release that already
+  # exists are already attached to it, and building them again only to throw
+  # them away costs four matrix jobs a week.
   binaries:
     name: Build release binaries
     needs: gate
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -240,7 +244,11 @@ jobs:
   release:
     name: GitHub release
     needs: [publish, binaries]
-    if: github.ref_type == 'tag'
+    # A weekly rebuild is dispatched on the release tag so that `latest` picks
+    # up base-image patches. That dispatch must not try to cut the release a
+    # second time: `gh release create` fails on a tag that already has one,
+    # and both the primary call and its `||` fallback would go red.
+    if: github.ref_type == 'tag' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -158,18 +158,47 @@ func (s *IdemStore) evictLocked() {
 // from a fresh write. Silently returning the old result would be the same
 // mistake in the other direction: an agent that cannot see it was replayed
 // will believe its second, different intention was carried out.
+//
+// That guarantee used to hold only for results that were already a map, and
+// every mutating tool happens to return one today. "Happens to" is the
+// problem: the label would go missing the first time a tool returned
+// something else, and it would go missing silently, in the one code path
+// whose entire job is to stop a caller from being misled. So the shape is
+// normalised here instead of being a convention eighteen tools have to keep.
 func markReplayed(result any) any {
-	m, ok := result.(map[string]any)
-	if !ok {
-		return result
-	}
-	out := make(map[string]any, len(m)+1)
-	for k, v := range m {
-		out[k] = v
+	out := asObject(result)
+	if out == nil {
+		// A list has nowhere to put the label, so it becomes the body of
+		// an object that does. The shape changes, which is the point: a
+		// caller reading "replayed" knows to look under "result".
+		out = map[string]any{"result": result}
 	}
 	out["replayed"] = true
 	if _, exists := out["message"]; !exists {
 		out["message"] = "replayed: an identical call was already applied, nothing was written again"
+	}
+	return out
+}
+
+// asObject returns a copy of v as a map, or nil when v is not an object.
+// A map is copied directly; anything else goes through JSON, which is the
+// same transformation the result would undergo on its way to the client, so
+// the replay and the original read alike.
+func asObject(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		out := make(map[string]any, len(m)+2)
+		for k, val := range m {
+			out[k] = val
+		}
+		return out
+	}
+	blob, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(blob, &out); err != nil || out == nil {
+		return nil
 	}
 	return out
 }

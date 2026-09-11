@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: "1.25"
+  GO_VERSION: "1.27"
 
   # Two registries, one image. ghcr.io and Docker Hub are peers here rather
   # than primary and mirror: a single buildx run pushes the *same digest* to

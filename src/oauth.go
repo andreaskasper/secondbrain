@@ -27,15 +27,17 @@ func (s *Server) handleProtectedResource(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleAuthServerMetadata(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Config()
 	writeJSONCached(w, map[string]any{
-		"issuer":                                cfg.Issuer(),
-		"authorization_endpoint":                cfg.endpoint("/authorize"),
-		"token_endpoint":                        cfg.endpoint("/token"),
-		"registration_endpoint":                 cfg.endpoint("/register"),
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
-		"scopes_supported":                      []string{"secondbrain"},
+		"issuer":                 cfg.Issuer(),
+		"authorization_endpoint": cfg.endpoint("/authorize"),
+		"token_endpoint":         cfg.endpoint("/token"),
+		"registration_endpoint":  cfg.endpoint("/register"),
+		"revocation_endpoint":    cfg.endpoint("/revoke"),
+		"revocation_endpoint_auth_methods_supported": []string{"none"},
+		"response_types_supported":                   []string{"code"},
+		"grant_types_supported":                      []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":           []string{"S256"},
+		"token_endpoint_auth_methods_supported":      []string{"none"},
+		"scopes_supported":                           []string{"secondbrain"},
 	})
 }
 

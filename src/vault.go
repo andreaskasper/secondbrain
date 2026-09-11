@@ -62,6 +62,12 @@ type Vault struct {
 	git     *GitStore
 	metrics *Metrics
 
+	// mergeEnabled mirrors the merge setting at the time the vault was
+	// opened, as v.git mirrors the git setting. Both are decided once,
+	// because a vault that starts without a repository cannot grow one
+	// halfway through a process.
+	mergeEnabled bool
+
 	// writeMu serialises mutations within a vault. Reads are unaffected;
 	// the cost of a global write lock per vault is nothing next to the cost
 	// of two tool calls interleaving inside one file.
@@ -130,7 +136,7 @@ func (m *VaultManager) open(name string) (*Vault, error) {
 	if v, ok := m.vaults[name]; ok {
 		return v, nil
 	}
-	v := &Vault{Name: name, Root: filepath.Join(m.root, name), metrics: m.metrics}
+	v := &Vault{Name: name, Root: filepath.Join(m.root, name), metrics: m.metrics, mergeEnabled: m.cfg.Merge}
 	if err := os.MkdirAll(filepath.Join(v.Root, internalDir), 0o755); err != nil {
 		return nil, err
 	}

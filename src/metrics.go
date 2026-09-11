@@ -33,6 +33,7 @@ type Metrics struct {
 
 	httpRequests map[string]int64 // path|status
 	logins       map[string]int64 // outcome
+	revocations  map[string]int64 // outcome
 
 	indexUpdates    int64
 	indexReconciles int64
@@ -58,6 +59,7 @@ func NewMetrics() *Metrics {
 		toolBytes:    map[string]int64{},
 		httpRequests: map[string]int64{},
 		logins:       map[string]int64{},
+		revocations:  map[string]int64{},
 	}
 }
 
@@ -90,6 +92,19 @@ func (m *Metrics) ObserveHTTP(path string, status int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.httpRequests[path+"|"+fmt.Sprint(status)]++
+}
+
+// ObserveRevocation records a call to the revocation endpoint. The outcome is
+// which kind of token was retired, or "unknown" when nothing matched - and
+// that second number is the interesting one, because a run of it means
+// somebody is guessing.
+func (m *Metrics) ObserveRevocation(outcome string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revocations[outcome]++
 }
 
 func (m *Metrics) ObserveLogin(outcome string) {
@@ -253,6 +268,12 @@ func (m *Metrics) Render(s snapshot) string {
 		logins = append(logins, fmt.Sprintf("secondbrain_logins_total{outcome=%q} %d", k, m.logins[k]))
 	}
 	write("secondbrain_logins_total", "Login attempts by outcome.", "counter", logins...)
+
+	var revs []string
+	for _, k := range sortedKeys(m.revocations) {
+		revs = append(revs, fmt.Sprintf("secondbrain_revocations_total{outcome=%q} %d", k, m.revocations[k]))
+	}
+	write("secondbrain_revocations_total", "Revocation requests by what was retired.", "counter", revs...)
 
 	write("secondbrain_writes_total", "Mutating tool calls that actually wrote.", "counter",
 		fmt.Sprintf("secondbrain_writes_total %d", m.writes))

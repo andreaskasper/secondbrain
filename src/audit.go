@@ -89,6 +89,7 @@ type AuditRecord struct {
 	Bytes      int
 	DryRun     bool
 	Truncated  bool
+	Replayed   bool
 	DurationMS int64
 	Error      string
 }
@@ -115,6 +116,9 @@ func (a AuditRecord) emit() {
 	}
 	if a.DryRun {
 		f["dry_run"] = true
+	}
+	if a.Replayed {
+		f["replayed"] = true
 	}
 	if a.Error != "" {
 		f["error"] = a.Error

@@ -5,12 +5,17 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// All state below lives in memory only and is lost on restart. That is the
-// point: a container holding credentials should leave nothing on disk.
+// All state below lives in memory. It is lost on restart unless the operator
+// sets a state key, in which case the subset that makes a restart invisible -
+// clients, refresh tokens, and the two tables behind reuse detection - is
+// written out encrypted by the caller through Export and Import. See
+// statestore.go for why that subset and not more.
 
 const (
 	maxClients      = 1000
@@ -74,7 +79,17 @@ type SessionStore struct {
 
 	// deadFamilies marks refresh-token families invalidated by a reuse.
 	deadFamilies map[string]time.Time
+
+	// dirty records that something worth persisting changed since the last
+	// snapshot. It is a flag rather than a write because the flusher runs on
+	// a timer: a client refreshing its token should not wait for a disk.
+	dirty atomic.Bool
 }
+
+func (s *SessionStore) markDirty() { s.dirty.Store(true) }
+
+// TakeDirty reports whether anything changed and clears the flag.
+func (s *SessionStore) TakeDirty() bool { return s.dirty.Swap(false) }
 
 type consumedToken struct {
 	family string
@@ -136,6 +151,7 @@ func (s *SessionStore) RegisterClient(name string, redirectURIs []string) *Clien
 		lastSeen:     time.Now(),
 	}
 	s.clients[c.ID] = c
+	s.markDirty()
 	return c
 }
 
@@ -263,6 +279,7 @@ func (s *SessionStore) IssueTokens(user, clientID, family string, ttl time.Durat
 	now := time.Now()
 	s.tokens[hashToken(access)] = &Token{User: user, ClientID: clientID, Family: family, Expiry: now.Add(ttl)}
 	s.refresh[hashToken(refresh)] = &Token{User: user, ClientID: clientID, Family: family, Expiry: now.Add(refreshTokenTTL)}
+	s.markDirty()
 	return access, refresh
 }
 
@@ -305,6 +322,7 @@ func (s *SessionStore) RotateRefresh(token, clientID string) (*Token, bool, bool
 	}
 	delete(s.refresh, h)
 	s.consumedRefresh[h] = consumedToken{family: t.Family, at: time.Now()}
+	s.markDirty()
 
 	if _, dead := s.deadFamilies[t.Family]; dead {
 		return nil, false, true
@@ -326,6 +344,7 @@ func (s *SessionStore) KillFamily(family string) {
 
 func (s *SessionStore) killFamilyLocked(family string) {
 	s.deadFamilies[family] = time.Now()
+	s.markDirty()
 	for h, t := range s.tokens {
 		if t.Family == family {
 			delete(s.tokens, h)
@@ -375,6 +394,7 @@ func (s *SessionStore) Sweep() {
 	for h, t := range s.refresh {
 		if now.After(t.Expiry) {
 			delete(s.refresh, h)
+			s.markDirty()
 		}
 	}
 	for h, e := range s.csrf {
@@ -414,4 +434,95 @@ func (s *SessionStore) Counts() (access, refresh, clients int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.tokens), len(s.refresh), len(s.clients)
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot and restore
+//
+// Only what a client needs in order not to notice a restart. Access tokens
+// and authorization codes are deliberately absent: the first is short lived
+// and re-mintable from a refresh token, the second lives sixty seconds and is
+// in flight during a login nobody is going to restart the server in the
+// middle of.
+// ---------------------------------------------------------------------------
+
+func (s *SessionStore) Export() *stateSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	snap := &stateSnapshot{}
+	for _, c := range s.clients {
+		snap.Clients = append(snap.Clients, stateClient{
+			ID: c.ID, Name: c.Name, RedirectURIs: c.RedirectURIs,
+			Created: c.Created, LastSeen: c.lastSeen,
+		})
+	}
+	for h, t := range s.refresh {
+		if now.After(t.Expiry) {
+			continue
+		}
+		snap.Refresh = append(snap.Refresh, stateToken{
+			Hash: h, User: t.User, ClientID: t.ClientID, Family: t.Family, Expiry: t.Expiry,
+		})
+	}
+	for f, at := range s.deadFamilies {
+		snap.Dead = append(snap.Dead, stateFamily{Family: f, At: at})
+	}
+	for h, c := range s.consumedRefresh {
+		snap.Consumed = append(snap.Consumed, stateConsumed{Hash: h, Family: c.family, At: c.at})
+	}
+	// Sorted so that two snapshots of the same state are the same bytes,
+	// which makes "did anything actually change" answerable by looking.
+	sort.Slice(snap.Clients, func(i, j int) bool { return snap.Clients[i].ID < snap.Clients[j].ID })
+	sort.Slice(snap.Refresh, func(i, j int) bool { return snap.Refresh[i].Hash < snap.Refresh[j].Hash })
+	sort.Slice(snap.Dead, func(i, j int) bool { return snap.Dead[i].Family < snap.Dead[j].Family })
+	sort.Slice(snap.Consumed, func(i, j int) bool { return snap.Consumed[i].Hash < snap.Consumed[j].Hash })
+	return snap
+}
+
+// Import merges a snapshot into an empty store and reports what it restored.
+// Expired entries are dropped on the way in rather than left for the janitor,
+// so the startup log says how much is actually usable.
+func (s *SessionStore) Import(snap *stateSnapshot) (clients, refresh int) {
+	if snap == nil {
+		return 0, 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for _, c := range snap.Clients {
+		if c.ID == "" {
+			continue
+		}
+		last := c.LastSeen
+		if last.IsZero() {
+			last = c.Created
+		}
+		s.clients[c.ID] = &Client{
+			ID: c.ID, Name: c.Name, RedirectURIs: c.RedirectURIs,
+			Created: c.Created, lastSeen: last,
+		}
+		clients++
+	}
+	for _, t := range snap.Refresh {
+		if t.Hash == "" || now.After(t.Expiry) {
+			continue
+		}
+		s.refresh[t.Hash] = &Token{User: t.User, ClientID: t.ClientID, Family: t.Family, Expiry: t.Expiry}
+		refresh++
+	}
+	cutoff := now.Add(-refreshTokenTTL)
+	for _, f := range snap.Dead {
+		if f.At.Before(cutoff) {
+			continue
+		}
+		s.deadFamilies[f.Family] = f.At
+	}
+	for _, c := range snap.Consumed {
+		if c.At.Before(cutoff) {
+			continue
+		}
+		s.consumedRefresh[c.Hash] = consumedToken{family: c.Family, at: c.At}
+	}
+	return clients, refresh
 }

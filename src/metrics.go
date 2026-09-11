@@ -44,6 +44,10 @@ type Metrics struct {
 	writes          int64
 	dryRuns         int64
 	truncated       int64
+	authFailures    int64
+	idemReplays     int64
+	merges          int64
+	mergeConflicts  int64
 }
 
 func NewMetrics() *Metrics {
@@ -129,6 +133,22 @@ func (m *Metrics) GitFailure() {
 }
 func (m *Metrics) TrashPurged(n int) {
 	m.add(func(x *Metrics) *int64 { return &x.trashPurged }, int64(n))
+}
+
+// AuthFailure counts requests to /mcp that were turned away. Until this
+// existed, a rejected request left no trace at all, and "is the client even
+// reaching us" could not be answered from the log.
+func (m *Metrics) AuthFailure() {
+	m.add(func(x *Metrics) *int64 { return &x.authFailures }, 1)
+}
+func (m *Metrics) IdempotentReplay() {
+	m.add(func(x *Metrics) *int64 { return &x.idemReplays }, 1)
+}
+func (m *Metrics) Merged() {
+	m.add(func(x *Metrics) *int64 { return &x.merges }, 1)
+}
+func (m *Metrics) MergeConflict() {
+	m.add(func(x *Metrics) *int64 { return &x.mergeConflicts }, 1)
 }
 
 // snapshot is the part of the picture the registry cannot know: it has to be
@@ -254,6 +274,14 @@ func (m *Metrics) Render(s snapshot) string {
 		fmt.Sprintf("secondbrain_git_failures_total %d", m.gitFailures))
 	write("secondbrain_trash_purged_total", "Trashed copies removed after the retention window.", "counter",
 		fmt.Sprintf("secondbrain_trash_purged_total %d", m.trashPurged))
+	write("secondbrain_auth_failures_total", "Requests to /mcp refused for want of a valid bearer token.", "counter",
+		fmt.Sprintf("secondbrain_auth_failures_total %d", m.authFailures))
+	write("secondbrain_idempotent_replays_total", "Repeated writes answered from the first result.", "counter",
+		fmt.Sprintf("secondbrain_idempotent_replays_total %d", m.idemReplays))
+	write("secondbrain_merges_total", "content_hash conflicts resolved by a three-way merge.", "counter",
+		fmt.Sprintf("secondbrain_merges_total %d", m.merges))
+	write("secondbrain_merge_conflicts_total", "content_hash conflicts that overlapped and were refused.", "counter",
+		fmt.Sprintf("secondbrain_merge_conflicts_total %d", m.mergeConflicts))
 
 	return b.String()
 }

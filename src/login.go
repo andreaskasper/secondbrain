@@ -98,14 +98,14 @@ func (s *Server) authorizeSubmit(w http.ResponseWriter, r *http.Request) {
 		// restarted the flow behind the user's back. The PKCE challenge is
 		// not ours to invent, so we cannot re-issue a usable form: say
 		// plainly what happened and where to restart.
-		logWarn("login_stale_form", map[string]any{"client_id": clientID, "ip": clientIP(r)})
+		logWarn("login_stale_form", map[string]any{"client_id": clientID, "ip": s.Config().ClientIP(r)})
 		renderError(w, http.StatusBadRequest,
 			"This login form is no longer valid - it was already used, or the client started a new "+
 				"attempt. Close this window and trigger the connection from your client again.")
 		return
 	}
 
-	ip := clientIP(r)
+	ip := s.Config().ClientIP(r)
 	if ok, _ := s.loginLimiter.Allow(ip); !ok {
 		s.metrics.ObserveLogin("rate_limited")
 		logWarn("login_failed", map[string]any{"reason": "rate_limited", "ip": ip})

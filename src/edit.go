@@ -30,6 +30,13 @@ type WriteResult struct {
 	HashAfter  string `json:"content_hash,omitempty"`
 	Bytes      int    `json:"bytes"`
 	Message    string `json:"message,omitempty"`
+
+	// Merged says the note had changed under the caller and the two sets of
+	// changes were reconciled rather than refused. It is reported loudly
+	// because the result is not what the caller asked for on its own: it
+	// also contains somebody else's work.
+	Merged     bool   `json:"merged,omitempty"`
+	MergedFrom string `json:"merged_base_commit,omitempty"`
 }
 
 type writeOp struct {
@@ -62,19 +69,29 @@ func (v *Vault) Apply(op writeOp) (*WriteResult, error) {
 		return nil, err
 	}
 	before := ""
+	var merged *mergeOutcome
 	if exists {
 		before = HashContent(cur)
 		if op.expected != "" && !strings.EqualFold(op.expected, before) {
-			return nil, fmt.Errorf("%w: %s has content_hash %s, not %s - read it again before writing",
-				errStale, clean, before, op.expected)
+			merged = v.tryMerge(op, clean, cur, op.expected)
+			if merged == nil || !merged.ok {
+				v.metrics.MergeConflict()
+				return nil, staleError(clean, before, op.expected, merged)
+			}
 		}
 	} else if op.expected != "" {
 		return nil, fmt.Errorf("%w: %s", errNotFound, clean)
 	}
 
-	next, err := op.transform(cur, exists)
-	if err != nil {
-		return nil, err
+	var next string
+	if merged != nil && merged.ok {
+		next = merged.merged
+	} else {
+		var err error
+		next, err = op.transform(cur, exists)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !op.skipTouch && next != "" {
 		next = touchUpdated(clean, next, exists)
@@ -85,12 +102,19 @@ func (v *Vault) Apply(op writeOp) (*WriteResult, error) {
 		HashBefore: before, HashAfter: HashContent(next), Bytes: len(next),
 		Diff: UnifiedDiff(cur, next, clean),
 	}
+	if merged != nil && merged.ok {
+		res.Merged = true
+		res.MergedFrom = merged.baseCommit
+		res.Message = "the note had changed since you read it; your edit was merged with the other change. " +
+			"Read the diff: it contains work that is not yours."
+		v.metrics.Merged()
+	}
 	if next == cur && exists {
 		res.Message = "no change"
 		return res, nil
 	}
 	if op.dryRun {
-		res.Message = "dry run: nothing was written"
+		res.Message = strings.TrimSpace(res.Message + " dry run: nothing was written")
 		return res, nil
 	}
 
@@ -107,6 +131,22 @@ func (v *Vault) Apply(op writeOp) (*WriteResult, error) {
 	}
 	v.afterWrite(clean, op.reason)
 	return res, nil
+}
+
+// staleError is the refusal a caller gets when its content_hash no longer
+// matches and the change could not be merged. The diff is attached when one
+// is available, because "it changed" without saying how leaves the caller
+// only one move: read the whole note again.
+func staleError(clean, actual, expected string, m *mergeOutcome) error {
+	msg := fmt.Sprintf("%s has content_hash %s, not %s", clean, actual, expected)
+	if m != nil && m.why != "" {
+		msg += " - " + m.why
+	}
+	msg += ". Read it again before writing."
+	if m != nil && m.diff != "" {
+		msg += "\n\nWhat changed since the version you read:\n" + m.diff
+	}
+	return fmt.Errorf("%w: %s", errStale, msg)
 }
 
 // Delete moves a note to the trash. Nothing in this program calls os.Remove on

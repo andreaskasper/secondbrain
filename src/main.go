@@ -44,6 +44,12 @@ type Server struct {
 
 	metrics *Metrics
 
+	// state is nil unless the operator configured a key. See statestore.go.
+	state *StateStore
+	// idem answers a repeated write from the first result instead of
+	// writing twice. See idempotency.go.
+	idem *IdemStore
+
 	loginLimiter    *KeyedLimiter
 	registerLimiter *KeyedLimiter
 	toolLimiter     *KeyedLimiter
@@ -66,6 +72,8 @@ func NewServer(cfg *Config) (*Server, error) {
 		startedAt: time.Now(),
 	}
 	s.setConfig(cfg)
+	s.state = NewStateStore(cfg.DataDir, cfg.StateKey)
+	s.idem = NewIdemStore(cfg.IdempotencyWindow)
 	s.loginLimiter = NewKeyedLimiter(cfg.LoginRateLimit)
 	registerRate, _ := ParseRate("20/h")
 	s.registerLimiter = NewKeyedLimiter(registerRate)
@@ -101,6 +109,11 @@ func (s *Server) routes() http.Handler {
 			// Stated explicitly so nobody has to read the source to find out
 			// whether a returned Mcp-Session-Id means anything here.
 			"stateless": true,
+			// Whether a restart will cost the operator a manual re-login.
+			// Asked every time an update is planned, and until now only
+			// answerable by reading the environment of a running container.
+			"token_persistence":  s.state != nil,
+			"idempotency_window": cfg.IdempotencyWindow.String(),
 		})
 	})
 	mux.HandleFunc("/favicon.ico", serveFavicon)
@@ -262,6 +275,11 @@ Environment:
   SECONDBRAIN_METRICS_KEY    shared key a scraper must present
   SECONDBRAIN_METRICS_LISTEN bind metrics to their own address instead
   SECONDBRAIN_LOG_LEVEL      debug|info|warn|error
+  SECONDBRAIN_TRUSTED_PROXIES reverse proxies whose forwarding header is believed
+  SECONDBRAIN_CLIENT_IP_HEADER which header that is (default X-Forwarded-For)
+  SECONDBRAIN_STATE_KEY      key that lets clients and refresh tokens survive a restart
+  SECONDBRAIN_IDEMPOTENCY_WINDOW how long an identical repeated write is replayed (default 60s)
+  SECONDBRAIN_MERGE          merge a content_hash conflict when git can supply the base (default true)
 `)
 }
 
@@ -288,6 +306,25 @@ func run() int {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	restoredClients, restoredRefresh := 0, 0
+	if s.state != nil {
+		snap, err := s.state.Load()
+		switch {
+		case err != nil:
+			// A key that no longer matches its file is an operator mistake,
+			// not a reason to refuse to serve. Say it loudly and carry on
+			// with an empty store, which costs one re-login.
+			logWarn("state_unreadable", map[string]any{"path": s.state.Path(), "error": err.Error()})
+		case snap != nil:
+			restoredClients, restoredRefresh = s.sessions.Import(snap)
+			logInfo("state_restored", map[string]any{
+				"path": s.state.Path(), "clients": restoredClients,
+				"refresh_tokens": restoredRefresh,
+				"saved_at":       snap.SavedAt.Format(time.RFC3339),
+			})
+		}
+	}
+
 	names := make([]string, 0)
 	for _, v := range s.vaults.List(nil) {
 		names = append(names, v.Name)
@@ -301,6 +338,7 @@ func run() int {
 
 	go s.sessions.RunJanitor(s.stop)
 	go s.housekeeping()
+	go s.persistState()
 	if cfg.Metrics && cfg.MetricsListen != "" {
 		go s.startMetricsListener(cfg.MetricsListen)
 	}
@@ -324,6 +362,12 @@ func run() int {
 		"token_ttl":        cfg.TokenTTL.String(),
 		"code_ttl":         cfg.CodeTTL.String(),
 		"protocol_version": mcpProtocolVersion,
+		// Three settings that change what a restart or a retry costs. All
+		// three were questions somebody had to answer over SSH before.
+		"token_persistence":  s.state != nil,
+		"idempotency_window": cfg.IdempotencyWindow.String(),
+		"merge_on_conflict":  cfg.Merge && cfg.Git,
+		"trusted_proxies":    len(cfg.TrustedProxies),
 	})
 
 	errCh := make(chan error, 1)
@@ -344,11 +388,42 @@ func run() int {
 	}
 
 	close(s.stop)
+	// Flush before the listener goes away rather than after: a snapshot
+	// taken on the way out is what makes a planned restart free.
+	s.flushState()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
 	logInfo("shutdown", map[string]any{"reason": "signal"})
 	return 0
+}
+
+// persistState writes the snapshot when something changed. The timer is what
+// keeps a token refresh off the disk path: the write happens shortly after,
+// not during.
+func (s *Server) persistState() {
+	if s.state == nil {
+		return
+	}
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			s.flushState()
+		case <-s.stop:
+			return
+		}
+	}
+}
+
+func (s *Server) flushState() {
+	if s.state == nil || !s.sessions.TakeDirty() {
+		return
+	}
+	if err := s.state.Save(s.sessions.Export()); err != nil {
+		logWarn("state_save_failed", map[string]any{"path": s.state.Path(), "error": err.Error()})
+	}
 }
 
 // housekeeping clears out old trash. There are no MCP sessions to sweep:
@@ -434,6 +509,26 @@ func cmdValidate(path string) int {
 	fmt.Printf("  default_vault: %s\n", cfg.DefaultVault)
 	fmt.Printf("  token_ttl:     %s (a client must refresh at least this often)\n", cfg.TokenTTL)
 	fmt.Printf("  git:           %v\n", cfg.Git)
+	if cfg.StateKey != "" {
+		fmt.Printf("  persistence:   on (clients and refresh tokens survive a restart)\n")
+	} else {
+		fmt.Printf("  persistence:   off (a restart costs one manual re-login)\n")
+	}
+	if cfg.IdempotencyWindow > 0 {
+		fmt.Printf("  idempotency:   %s automatic window, explicit keys always\n", cfg.IdempotencyWindow)
+	} else {
+		fmt.Printf("  idempotency:   explicit keys only\n")
+	}
+	fmt.Printf("  merge:         %v\n", cfg.Merge && cfg.Git)
+	if len(cfg.TrustedProxies) > 0 {
+		header := cfg.ClientIPHeader
+		if header == "" {
+			header = defaultClientIPHeader
+		}
+		fmt.Printf("  client ip:     %s, trusted from %s\n", header, strings.Join(cfg.TrustedProxies, ", "))
+	} else {
+		fmt.Printf("  client ip:     connection peer (no trusted proxies configured)\n")
+	}
 	if cfg.Metrics {
 		where := "the main listener"
 		if cfg.MetricsListen != "" {

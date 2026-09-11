@@ -75,6 +75,11 @@ func (t *Tool) schema(defaultVault string) map[string]any {
 	if !t.NoVault {
 		props["vault"] = str(vaultDesc + " Default: " + defaultVault + ".")
 	}
+	if t.Mutates {
+		props[idemArgKey] = str("Optional. A string you choose that identifies this write. " +
+			"Send the same key when retrying after a timeout and the write is applied once, " +
+			"not twice; the repeat comes back with replayed: true.")
+	}
 	return map[string]any{
 		"type":                 "object",
 		"properties":           props,
@@ -161,6 +166,32 @@ func (s *Server) callTool(req rpcRequest, user *User, cfg *Config) *rpcResponse 
 	rec.Path = ctx.optString("path", "")
 	rec.DryRun = ctx.optBool("dry_run", false)
 
+	// A repeated write is answered from the first result rather than applied
+	// again. Reads are untouched: repeating a read is free and a cached one
+	// would be wrong.
+	var idemKey string
+	var idemExplicit bool
+	if t.Mutates && !rec.DryRun {
+		key, explicit, usable := s.idem.Key(user.Name, p.Name, p.Arguments)
+		if usable {
+			if prev, hit := s.idem.Lookup(key); hit {
+				rec.DurationMS = time.Since(start).Milliseconds()
+				rec.Replayed = true
+				payload, truncated := encodeResult(markReplayed(prev), cfg.MaxResponseBytes)
+				rec.Bytes = len(payload)
+				rec.Truncated = truncated
+				rec.emit()
+				s.metrics.IdempotentReplay()
+				s.metrics.ObserveTool(p.Name, "replayed", rec.seconds(), len(payload), false, truncated, t.Mutates)
+				logInfo("idempotent_replay", map[string]any{
+					"user": user.Name, "tool": p.Name, "explicit_key": explicit,
+				})
+				return rpcOK(req.ID, toolContent(payload, markReplayed(prev)))
+			}
+			idemKey, idemExplicit = key, explicit
+		}
+	}
+
 	result, err := t.Handler(ctx)
 	rec.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
@@ -175,14 +206,21 @@ func (s *Server) callTool(req rpcRequest, user *User, cfg *Config) *rpcResponse 
 	rec.Truncated = truncated
 	rec.emit()
 	s.metrics.ObserveTool(p.Name, "ok", rec.seconds(), len(payload), rec.DryRun, truncated, t.Mutates)
+	s.idem.Remember(idemKey, idemExplicit, result)
 
+	return rpcOK(req.ID, toolContent(payload, result))
+}
+
+// toolContent is the MCP result envelope: the rendered text every client can
+// display, plus the structured form for those that can use it.
+func toolContent(payload string, result any) map[string]any {
 	res := map[string]any{
 		"content": []map[string]any{{"type": "text", "text": payload}},
 	}
 	if m, ok := result.(map[string]any); ok {
 		res["structuredContent"] = m
 	}
-	return rpcOK(req.ID, res)
+	return res
 }
 
 // toolError reports a failure inside the result rather than as a JSON-RPC

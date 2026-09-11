@@ -31,7 +31,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	// Its own rate limit bucket, so a scraper with the wrong key cannot be
 	// used as a timing oracle and cannot exhaust the login limiter.
-	if ok, _ := s.metricsLimiter.Allow(clientIP(r)); !ok {
+	if ok, _ := s.metricsLimiter.Allow(s.Config().ClientIP(r)); !ok {
 		writeHTTPError(w, http.StatusTooManyRequests, "too many requests")
 		return
 	}

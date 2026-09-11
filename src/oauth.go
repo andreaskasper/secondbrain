@@ -62,7 +62,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if ok, _ := s.registerLimiter.Allow(clientIP(r)); !ok {
+	if ok, _ := s.registerLimiter.Allow(s.Config().ClientIP(r)); !ok {
 		writeHTTPError(w, http.StatusTooManyRequests, "too many registrations")
 		return
 	}
@@ -278,12 +278,4 @@ func writeHTTPError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]any{"error": msg, "status": status})
-}
-
-func clientIP(r *http.Request) string {
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
-	}
-	return strings.Trim(host, "[]")
 }

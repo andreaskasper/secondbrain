@@ -15,7 +15,7 @@ concurrency:
 
 env:
   # Tracks src/go.mod. The Dockerfile pins the same minor version.
-  GO_VERSION: "1.25"
+  GO_VERSION: "1.27"
   # Pinned deliberately: with @latest a release of either tool can turn CI red
   # without a line of our code having changed, and two runs of the same commit
   # are not guaranteed to agree. Bumping them should be a decision.

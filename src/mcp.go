@@ -87,7 +87,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	cfg := s.Config()
 
 	if origin := r.Header.Get("Origin"); origin != "" && !s.originAllowed(cfg, origin) {
-		logWarn("origin_refused", map[string]any{"origin": origin, "ip": clientIP(r)})
+		logWarn("origin_refused", map[string]any{"origin": origin, "ip": cfg.ClientIP(r)})
 		writeHTTPError(w, http.StatusForbidden, "origin not allowed")
 		return
 	}
@@ -116,11 +116,19 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		// A server with nothing to push may refuse the stream, and this one
 		// has nothing to push: it advertises listChanged:false and never sent
 		// a notification, so the stream only ever carried keep-alives.
+		//
+		// Logged because a client that keeps asking for a stream it will
+		// never get is a client whose behaviour somebody should know about,
+		// and because a 405 that appears nowhere is another silent refusal.
+		logInfo("mcp_stream_refused", map[string]any{
+			"user": user.Name, "user_agent": shortUA(r.UserAgent()),
+		})
 		w.Header().Set("Allow", "POST, DELETE")
 		writeHTTPError(w, http.StatusMethodNotAllowed, "this server does not offer a notification stream")
 		return
 	case http.MethodPost:
 	default:
+		logInfo("mcp_method_refused", map[string]any{"user": user.Name, "method": r.Method})
 		w.Header().Set("Allow", "POST, DELETE")
 		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -193,26 +201,66 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, cfg *Confi
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(auth) <= len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
-		s.challenge(w, cfg)
+		reason := "no_authorization_header"
+		if auth != "" {
+			reason = "authorization_header_is_not_bearer"
+		}
+		s.refuse(w, r, cfg, reason)
 		return nil, false
 	}
 	raw := strings.TrimSpace(auth[len(prefix):])
 	tok := s.sessions.LookupAccess(raw)
 	if tok == nil {
-		s.challenge(w, cfg)
+		// Three different situations arrive here and the client cannot tell
+		// them apart, on purpose: an expired token, a token from before a
+		// restart, and a token from a family killed by a reuse. What the
+		// operator needs is not which one it was but that it happened.
+		s.refuse(w, r, cfg, "unknown_or_expired_access_token")
 		return nil, false
 	}
 	user, ok := cfg.Users[tok.User]
 	if !ok {
-		s.challenge(w, cfg)
+		s.refuse(w, r, cfg, "user_no_longer_configured")
 		return nil, false
 	}
 	return user, true
 }
 
+// refuse answers 401 and leaves a line in the log saying so.
+//
+// It used not to. A rejected request produced no output at all, which meant
+// the two questions an operator asks when a connector stops working - is it
+// reaching us, and is it being turned away - had the same answer in the log:
+// silence. Diagnosing that once cost an afternoon and an SSH session. The
+// line below is the whole fix. It names the reason, the caller and the
+// client, and never the token or any part of it: a bearer token in a log
+// file is a bearer token in a backup.
+func (s *Server) refuse(w http.ResponseWriter, r *http.Request, cfg *Config, reason string) {
+	s.metrics.AuthFailure()
+	logWarn("auth_failed", map[string]any{
+		"reason":     reason,
+		"ip":         cfg.ClientIP(r),
+		"method":     r.Method,
+		"user_agent": shortUA(r.UserAgent()),
+	})
+	s.challenge(w, cfg)
+}
+
+// shortUA keeps the log line readable. A user agent is the only hint about
+// which of several clients went quiet, so it is worth recording, and no
+// client needs two hundred characters to identify itself.
+func shortUA(ua string) string {
+	ua = strings.TrimSpace(ua)
+	if len(ua) > 80 {
+		return ua[:80] + "..."
+	}
+	return ua
+}
+
 func (s *Server) challenge(w http.ResponseWriter, cfg *Config) {
 	w.Header().Set("WWW-Authenticate",
 		fmt.Sprintf(`Bearer resource_metadata=%q`, cfg.endpoint("/.well-known/oauth-protected-resource")))
+	w.Header().Set("Cache-Control", "no-store")
 	writeHTTPError(w, http.StatusUnauthorized, "authentication required")
 }
 

@@ -54,6 +54,7 @@ type Server struct {
 	registerLimiter *KeyedLimiter
 	toolLimiter     *KeyedLimiter
 	metricsLimiter  *KeyedLimiter
+	revokeLimiter   *KeyedLimiter
 }
 
 func (s *Server) Config() *Config     { return s.cfg.Load() }
@@ -81,6 +82,8 @@ func NewServer(cfg *Config) (*Server, error) {
 	s.toolLimiter = NewKeyedLimiter(toolRate)
 	metricsRate, _ := ParseRate("60/m")
 	s.metricsLimiter = NewKeyedLimiter(metricsRate)
+	revRate, _ := ParseRate(revokeRate)
+	s.revokeLimiter = NewKeyedLimiter(revRate)
 	vm.metrics = s.metrics
 	return s, nil
 }
@@ -114,6 +117,9 @@ func (s *Server) routes() http.Handler {
 			// answerable by reading the environment of a running container.
 			"token_persistence":  s.state != nil,
 			"idempotency_window": cfg.IdempotencyWindow.String(),
+			// Named so a client can find it without parsing the
+			// authorization-server metadata first.
+			"revocation_endpoint": cfg.endpoint("/revoke"),
 		})
 	})
 	mux.HandleFunc("/favicon.ico", serveFavicon)
@@ -126,6 +132,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/register", s.handleRegister)
 	mux.HandleFunc("/authorize", s.handleAuthorize)
 	mux.HandleFunc("/token", s.handleToken)
+	mux.HandleFunc("/revoke", s.handleRevoke)
 	mux.HandleFunc("/mcp", s.handleMCP)
 	// Only mounted on the main listener when metrics have no address of their
 	// own. Registering the route conditionally is the difference between "the
@@ -159,7 +166,8 @@ func securityWrapper(next http.Handler) http.Handler {
 func (s *Server) observed(next http.Handler) http.Handler {
 	known := map[string]bool{
 		"/healthz": true, "/mcp": true, "/register": true, "/authorize": true,
-		"/token": true, "/favicon.ico": true, "/favicon.svg": true, "/logo.svg": true, "/": true,
+		"/token": true, "/revoke": true, "/favicon.ico": true, "/favicon.svg": true,
+		"/logo.svg": true, "/": true,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route := r.URL.Path
@@ -217,6 +225,8 @@ func main() {
 			os.Exit(cmdValidate(configPath(args)))
 		case "reindex":
 			os.Exit(cmdReindex(configPath(args)))
+		case "revoke-all":
+			os.Exit(cmdRevokeAll(configPath(args)))
 		case "version", "-v", "--version":
 			fmt.Printf("secondbrain %s (commit %s, built %s)\n", version, commit, built)
 			return
@@ -249,6 +259,7 @@ Usage:
   secondbrain                 Run the server
   secondbrain validate [path] Check the configuration and print what it means
   secondbrain reindex [path]  Rebuild the search index for every vault
+  secondbrain revoke-all [path] Discard every stored credential
   secondbrain hashpw          Read a password and print a bcrypt hash
   secondbrain version         Print version information
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ const (
 	defaultLoginLimit   = "10/m"
 	defaultTrashRetain  = 30 * 24 * time.Hour
 	defaultMaxNoteBytes = 4 << 20 // refuse to index or read anything larger
+	defaultIdemWindow   = 60 * time.Second
 )
 
 // vaultNameRe is the whole reason path traversal is not a concern for vault
@@ -51,6 +53,15 @@ type Config struct {
 	Listen         string   `yaml:"listen"`
 	PublicURL      string   `yaml:"public_url"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
+
+	// TrustedProxies names the reverse proxies whose forwarding header may
+	// be believed. Empty - the default - means no header is believed and
+	// every caller is attributed to the address that opened the connection.
+	TrustedProxies []string `yaml:"trusted_proxies"`
+	// ClientIPHeader is which header to read once the peer is trusted.
+	// Empty means X-Forwarded-For. Behind a CDN, name the CDN's own header.
+	ClientIPHeader string       `yaml:"client_ip_header"`
+	trustedNets    []*net.IPNet `yaml:"-"`
 
 	DataDir      string `yaml:"data_dir"`
 	DefaultVault string `yaml:"default_vault"`
@@ -65,6 +76,25 @@ type Config struct {
 	RawCodeTTL        string `yaml:"code_ttl"`
 	RawTrashRetention string `yaml:"trash_retention"`
 	RawLoginRate      string `yaml:"login_rate_limit"`
+
+	// StateKey turns on persistence of the OAuth client registrations and
+	// refresh tokens across a restart. Empty - the default - keeps every
+	// credential in memory only, which is what this server did before and
+	// what a container holding secrets should do unless told otherwise.
+	StateKey string `yaml:"state_key"`
+
+	// IdempotencyWindow is how long an identical repeat of a write is
+	// answered from the first result instead of being written again. Zero
+	// switches the automatic window off; an explicit idempotency_key still
+	// works.
+	IdempotencyWindow    time.Duration `yaml:"-"`
+	RawIdempotencyWindow string        `yaml:"idempotency_window"`
+
+	// Merge decides whether a content_hash conflict is attempted as a
+	// three-way merge before it is refused. It needs git for the base
+	// version, so it does nothing when git is off.
+	Merge    bool  `yaml:"-"`
+	RawMerge *bool `yaml:"merge"`
 
 	Git       bool   `yaml:"git"`
 	GitRemote string `yaml:"git_remote"`
@@ -129,19 +159,21 @@ func (c *Config) endpoint(path string) string { return c.Issuer() + path }
 // file exists at path, from that file as well. path may be empty.
 func LoadConfig(path string) (*Config, error) {
 	c := &Config{
-		Listen:           defaultListen,
-		DataDir:          defaultDataDir,
-		DefaultVault:     defaultVaultName,
-		MaxResponseBytes: defaultMaxResponse,
-		TokenTTL:         defaultTokenTTL,
-		CodeTTL:          defaultCodeTTL,
-		TrashRetention:   defaultTrashRetain,
-		Git:              true,
-		MetricsPath:      "/metrics",
-		GitAuthor:        "secondbrain",
-		GitEmail:         "secondbrain@localhost",
-		Users:            map[string]*User{},
-		Source:           "environment",
+		Listen:            defaultListen,
+		DataDir:           defaultDataDir,
+		DefaultVault:      defaultVaultName,
+		MaxResponseBytes:  defaultMaxResponse,
+		TokenTTL:          defaultTokenTTL,
+		CodeTTL:           defaultCodeTTL,
+		TrashRetention:    defaultTrashRetain,
+		IdempotencyWindow: defaultIdemWindow,
+		Merge:             true,
+		Git:               true,
+		MetricsPath:       "/metrics",
+		GitAuthor:         "secondbrain",
+		GitEmail:          "secondbrain@localhost",
+		Users:             map[string]*User{},
+		Source:            "environment",
 	}
 	c.LoginRateLimit, _ = ParseRate(defaultLoginLimit)
 
@@ -195,6 +227,19 @@ func (c *Config) applyRawDurations() error {
 		}
 		*p.dst = d
 	}
+	if c.RawIdempotencyWindow != "" {
+		d, err := time.ParseDuration(c.RawIdempotencyWindow)
+		if err != nil {
+			return fmt.Errorf("idempotency_window: %w", err)
+		}
+		if d < 0 {
+			return fmt.Errorf("idempotency_window must not be negative")
+		}
+		c.IdempotencyWindow = d
+	}
+	if c.RawMerge != nil {
+		c.Merge = *c.RawMerge
+	}
 	if c.RawLoginRate != "" {
 		r, err := ParseRate(c.RawLoginRate)
 		if err != nil {
@@ -215,6 +260,35 @@ func (c *Config) applyEnv() error {
 	setString(&c.GitEmail, "SECONDBRAIN_GIT_EMAIL")
 	setString(&c.MetricsPath, "SECONDBRAIN_METRICS_PATH")
 	setString(&c.MetricsListen, "SECONDBRAIN_METRICS_LISTEN")
+	setString(&c.ClientIPHeader, "SECONDBRAIN_CLIENT_IP_HEADER")
+
+	if v := os.Getenv("SECONDBRAIN_TRUSTED_PROXIES"); v != "" {
+		c.TrustedProxies = splitList(v)
+	}
+	if v := os.Getenv("SECONDBRAIN_STATE_KEY"); v != "" {
+		c.StateKey = v
+	}
+	if c.StateKey != "" {
+		resolved, err := resolveSecret(c.StateKey)
+		if err != nil {
+			return fmt.Errorf("state_key: %w", err)
+		}
+		c.StateKey = resolved
+	}
+	if v := os.Getenv("SECONDBRAIN_IDEMPOTENCY_WINDOW"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return fmt.Errorf("SECONDBRAIN_IDEMPOTENCY_WINDOW must be a duration such as 60s, or 0 to switch it off")
+		}
+		c.IdempotencyWindow = d
+	}
+	if v := os.Getenv("SECONDBRAIN_MERGE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("SECONDBRAIN_MERGE must be true or false")
+		}
+		c.Merge = b
+	}
 
 	if v := os.Getenv("SECONDBRAIN_METRICS"); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -367,6 +441,23 @@ func (c *Config) validate() error {
 	}
 	if c.MaxResponseBytes < 4096 {
 		return fmt.Errorf("max_response_bytes must be at least 4096")
+	}
+	nets, err := parseTrustedProxies(c.TrustedProxies)
+	if err != nil {
+		return fmt.Errorf("trusted_proxies: %w", err)
+	}
+	c.trustedNets = nets
+	if c.ClientIPHeader != "" && len(nets) == 0 {
+		// Naming a header without naming who may set it reads like the
+		// header will be honoured, and it will not be. Say so rather than
+		// let the operator believe the rate limiter is keyed per caller.
+		logWarn("client_ip_header_ignored", map[string]any{
+			"header": c.ClientIPHeader,
+			"hint":   "set trusted_proxies (SECONDBRAIN_TRUSTED_PROXIES) to the reverse proxy's address, or the header is ignored",
+		})
+	}
+	if c.StateKey != "" && len(c.StateKey) < 16 {
+		return fmt.Errorf("state_key must be at least 16 characters")
 	}
 	if c.Metrics {
 		if !strings.HasPrefix(c.MetricsPath, "/") {

@@ -80,12 +80,20 @@ func (t *Tool) schema(defaultVault string) map[string]any {
 			"Send the same key when retrying after a timeout and the write is applied once, " +
 			"not twice; the repeat comes back with replayed: true.")
 	}
-	return map[string]any{
+	schema := map[string]any{
 		"type":                 "object",
 		"properties":           props,
-		"required":             t.Required,
 		"additionalProperties": false,
 	}
+	// A tool without mandatory arguments has a nil Required slice, which
+	// encoding/json writes as "required": null. JSON Schema demands an array
+	// there, and a client that validates tools/list rejects the whole list
+	// over it - every tool vanishes, not just the eleven affected ones.
+	// Omitting the key is valid and means the same thing as an empty array.
+	if len(t.Required) > 0 {
+		schema["required"] = t.Required
+	}
+	return schema
 }
 
 // toolDefinitions returns what the client sees. A read-only user is not shown

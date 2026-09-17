@@ -297,4 +297,9 @@ jobs:
             --title "secondbrain ${GITHUB_REF_NAME}" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --generate-notes --latest \
-            dist/*
+            dist/* || \
+          { gh release upload "${GITHUB_REF_NAME}" dist/* --clobber && \
+            gh release edit "${GITHUB_REF_NAME}" \
+              --title "secondbrain ${GITHUB_REF_NAME}" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              --latest; }

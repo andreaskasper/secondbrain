@@ -290,11 +290,11 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "secondbrain ${GITHUB_REF_NAME}" \
             --notes-file "$RUNNER_TEMP/notes.md" \
-            --generate-notes \
+            --generate-notes --latest \
             --verify-tag \
             dist/* || \
           gh release create "${GITHUB_REF_NAME}" \
             --title "secondbrain ${GITHUB_REF_NAME}" \
             --notes-file "$RUNNER_TEMP/notes.md" \
-            --generate-notes \
+            --generate-notes --latest \
             dist/*
